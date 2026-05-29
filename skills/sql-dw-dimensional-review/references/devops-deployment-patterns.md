@@ -425,6 +425,28 @@ END
 
 ## 4. SSAS Tabular Model Deployment
 
+### Environment Naming Convention
+
+Each SSAS environment has a dedicated database with a `_<ENV>` suffix:
+
+| Environment | Database Name | Deployed by |
+|---|---|---|
+| Developer local | `<ModelName>_DEV` | Developer (Tabular Editor, manual) |
+| Shared test | `<ModelName>_TEST` | ADO pipeline |
+| UAT | `<ModelName>_UAT` | ADO pipeline |
+| Production | `<ModelName>_PROD` | ADO pipeline |
+
+Example: `EAO_Tabular_DEV`, `EAO_Tabular_TEST`, `EAO_Tabular_UAT`, `EAO_Tabular_PROD`
+
+Developers manually deploy only to `_DEV`. The ADO pipeline promotes the TMDL folder from git
+through TEST → UAT → PROD. See `ssas-tabular-bp.md` for the full developer workflow.
+
+### Source Control: Always Use TMDL Folder
+
+- The **TMDL folder** is the source of truth in git (not `.bim`)
+- Tabular Editor workflow: **Open from folder** → deploy to `_DEV` → edit → **Save as folder** → commit
+- TMDL gives granular git diffs: one `.tmdl` file per table/role/relationship
+
 ### Option A: Tabular Editor CLI (Recommended)
 
 ```powershell
@@ -432,9 +454,9 @@ END
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $TabularEditorPath,   # path to te3.exe or te.exe
-    [Parameter(Mandatory)] [string] $BimPath,             # path to .bim or TMDL folder
+    [Parameter(Mandatory)] [string] $ModelPath,           # TMDL folder path (preferred) or .bim file
     [Parameter(Mandatory)] [string] $SsasServer,
-    [Parameter(Mandatory)] [string] $DatabaseName,
+    [Parameter(Mandatory)] [string] $DatabaseName,        # e.g. EAO_Tabular_TEST
     [switch] $WhatIf
 )
 
@@ -444,16 +466,27 @@ if (-not (Test-Path $TabularEditorPath)) {
     Write-Error "Tabular Editor CLI not found: $TabularEditorPath"
     exit 1
 }
+if (-not (Test-Path $ModelPath)) {
+    Write-Error "Model path not found: $ModelPath"
+    exit 1
+}
 
 if ($WhatIf) {
-    Write-Host "WhatIf: Would deploy [$BimPath] to [$SsasServer/$DatabaseName]"
+    Write-Host "WhatIf: Would deploy [$ModelPath] to [$SsasServer/$DatabaseName]"
     exit 0
 }
 
 Write-Host "Deploying SSAS Tabular model to $SsasServer / $DatabaseName..."
+Write-Host "  Source: $ModelPath"
 
-# te3.exe syntax: te3 <model> -deploy <server> <database> -v
-$result = & "$TabularEditorPath" "$BimPath" -deploy "$SsasServer" "$DatabaseName" -v 2>&1
+# te3.exe / TabularEditor.exe syntax:
+#   <model_path> -deploy <server> <database> [-O overwrite] [-R retain partitions] [-P deploy roles] -v
+$result = & "$TabularEditorPath" "$ModelPath" `
+    -deploy "$SsasServer" "$DatabaseName" `
+    -O `    # Overwrite existing database
+    -R `    # Retain existing partitions (preserves incremental partition data)
+    -P `    # Deploy roles
+    -v 2>&1
 
 Write-Host $result
 
@@ -462,8 +495,22 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "SSAS model deployment successful."
+Write-Host "SSAS model deployment successful: $DatabaseName"
 exit 0
+```
+
+**In the ADO pipeline**, call this script per environment:
+
+```yaml
+- task: PowerShell@2
+  displayName: 'Deploy SSAS Model to TEST'
+  inputs:
+    filePath: 'scripts/Deploy-SsasModel.ps1'
+    arguments: >
+      -TabularEditorPath "$(TabularEditorPath)"
+      -ModelPath "$(Pipeline.Workspace)/DWArtifacts/ssas/EAO_Tabular"
+      -SsasServer "$(SSAS_SERVER)"
+      -DatabaseName "$(SSAS_DATABASE)"   # = EAO_Tabular_TEST in DW-Test variable group
 ```
 
 ### Option B: XMLA Script via PowerShell (AMO / SqlServer module)
@@ -535,11 +582,14 @@ exit 0
 
 ### SSAS Deployment Conventions
 
-- Store the `.bim` file or TMDL folder under source control alongside the DW project
-- **Data source connection string** in the model should use `Data Source=$(SSAS_DW_SERVER); Initial Catalog=$(SSAS_DW_DATABASE)` — parameterized via Tabular Editor scripting or deployment overrides
-- **Do not deploy from Visual Studio GUI** — always use Tabular Editor CLI in the pipeline
-- **Process after deploy**: separate pipeline step so deploy failure doesn't leave partially-processed model
-- **Full process on schema change** (new columns); `Default` process for data refresh
+- **Source of truth**: TMDL folder in git — **not** `.bim`, not VS SSAS project
+- **Developer workflow**: Open from folder → deploy to `_DEV` → edit → Save as folder → commit. See `ssas-tabular-bp.md` Developer Workflow section.
+- **Environment databases**: `_DEV` (developer), `_TEST`, `_UAT`, `_PROD` (pipeline only)
+- **Do not deploy from Visual Studio GUI or SSAS Deployment Wizard** — always use Tabular Editor CLI
+- **Always pass `-R` (retain partitions)** in the deploy command to preserve incremental partition data from prior process runs
+- **Data source connection string** in the model is parameterized — the pipeline variable group supplies the correct `_TEST`/`_UAT`/`_PROD` DW server and database per environment
+- **Process after deploy**: separate pipeline step so a failed deploy doesn't leave a partially-processed model
+- **Full process on schema change** (new tables/columns); `Default` for data refresh; `Calculate` after relationship-only changes
 
 ---
 

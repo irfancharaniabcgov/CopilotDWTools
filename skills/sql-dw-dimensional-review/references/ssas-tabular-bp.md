@@ -80,6 +80,164 @@ TabularEditor.exe ".\TMDL\database.tmdl" -B "Model.bim"
 
 ---
 
+## Developer Workflow (Git + Tabular Editor + ADO Server)
+
+This is the canonical developer workflow for on-premises SSAS Tabular development with Tabular
+Editor, TMDL source control, and Azure DevOps Server (on-prem) pipeline promotion.
+
+### Environment Naming Convention
+
+Each environment has a dedicated SSAS database with a suffix:
+
+| Environment | SSAS Database Name Pattern | Who deploys |
+|---|---|---|
+| Local dev | `<ModelName>_DEV` | Developer (Tabular Editor, manual) |
+| Shared test | `<ModelName>_TEST` | ADO pipeline |
+| UAT | `<ModelName>_UAT` | ADO pipeline |
+| Production | `<ModelName>_PROD` | ADO pipeline |
+
+Example: `EAO_Tabular_DEV`, `EAO_Tabular_TEST`, `EAO_Tabular_UAT`, `EAO_Tabular_PROD`
+
+> **Rule**: Developers deploy only to `_DEV`. ADO Server owns all promotions from TEST onwards.
+
+### Step-by-Step Developer Workflow
+
+```
+Step 1  Git                Pull latest changes from repo (main or feature branch)
+         git pull origin main
+
+Step 2  Tabular Editor     Open the model from the TMDL folder in git
+         File → Open → From folder → select the SSAS\<ModelName>\ folder
+         (do NOT open from .bim — always open from TMDL folder)
+
+Step 3  Tabular Editor     Deploy to local _DEV instance
+         Model → Deploy → Server: <ssas-dev-server>
+         Database: EAO_Tabular_DEV
+         Options: Overwrite existing ✓, Deploy roles ✓
+
+Step 4  Tabular Editor     Open from DB (switch to live-connected mode)
+         File → Open → From DB → select EAO_Tabular_DEV
+         (reason: ensures you're working against the actual deployed state,
+          not a stale folder; also reveals any post-deploy state differences)
+
+Step 5  Tabular Editor     Make and deploy changes iteratively
+         Edit model objects → click Save (Ctrl+S) → changes auto-deploy to _DEV
+         or:  Model → Deploy again if making structural changes
+
+Step 6  SSMS               Process model (only if required — see table below)
+         SSMS → Connect SSAS → right-click EAO_Tabular_DEV → Process
+
+Step 7  Power BI Desktop   Test changes in a live-connected report
+   or   Excel              Connect to EAO_Tabular_DEV via Get Data → SSAS
+
+Step 8  Tabular Editor     Save as folder (write changes back to TMDL folder)
+         File → Save as → To folder → overwrite SSAS\<ModelName>\ folder
+         (this updates the TMDL files for git commit)
+
+Step 9  Git                Review diff, commit, and push
+         git diff           ← review changed .tmdl files
+         git add -A
+         git commit -m "feat: add YTD Revenue measure"
+         git push
+
+Step 10  Azure DevOps      Pipeline runs automatically on push:
+          Server            Build validation → Deploy to TEST → UAT gate → PROD
+```
+
+### When to Process After Deploying
+
+Not all model changes require a full model process. Process only when the semantic engine needs
+to re-read data from the DW:
+
+| Change Type | Processing Required? | Process Type |
+|---|---|---|
+| Add or modify a measure (DAX) | ❌ No | — |
+| Add a calculated column | ❌ No (DEV testing only; avoid in production models) | — |
+| Change format string / display folder | ❌ No | — |
+| Add or modify a role / RLS expression | ❌ No | — |
+| Change measure description | ❌ No | — |
+| Add a new table (with partition query) | ✅ Yes | Process Full (new table) |
+| Add a new column from DW | ✅ Yes | Process Full (or ProcessAdd on table) |
+| Change a partition query | ✅ Yes | Process Partition |
+| Add or modify a relationship | ✅ Yes | Process Recalculate |
+| Rename a source column (data lineage change) | ✅ Yes | Process Full |
+| First-time deployment of model | ✅ Yes | Process Full |
+
+```powershell
+# Process from SSMS: right-click DB → Process → select type
+# Or via XMLA in SSMS:
+{
+  "refresh": {
+    "type": "full",          # or "dataOnly", "calculate", "add"
+    "objects": [
+      { "database": "EAO_Tabular_DEV" }
+    ]
+  }
+}
+
+# Quick recalculate only (after adding relationships — fast)
+{
+  "refresh": {
+    "type": "calculate",
+    "objects": [ { "database": "EAO_Tabular_DEV" } ]
+  }
+}
+```
+
+### TMDL Folder Structure in Git
+
+```
+SSAS/
+  EAO_Tabular/              ← TMDL folder (Tabular Editor "Save as folder" target)
+    database.tmdl           ← model-level settings
+    model.tmdl              ← model metadata
+    tables/
+      Sales.tmdl            ← one file per table (columns + partition + measures)
+      Customer.tmdl
+      Date.tmdl
+    relationships/
+      relationships.tmdl    ← all relationships
+    roles/
+      Role_Analysts.tmdl    ← one file per role
+    cultures/               ← optional: translations
+    perspectives/           ← optional: perspectives
+    expressions/            ← shared M expressions (if used)
+```
+
+**Git diff benefits with TMDL**:
+- Adding a measure → only `tables/<TableName>.tmdl` changes (not the whole model file)
+- Adding a role → only `roles/<RoleName>.tmdl` is new
+- PR reviews show exactly which measures/columns changed
+- Merge conflicts are isolated to individual object files
+
+### "Open from DB" vs "Open from Folder" — When to Use Each
+
+| Scenario | Open from |
+|---|---|
+| Starting a new development session | Folder (get git-latest state first) |
+| After deploying to _DEV | DB (to work against live deployed state) |
+| Reviewing what's in TEST/UAT/PROD | DB (read-only — never save from a non-DEV DB) |
+| Generating documentation scripts | Either (both give same metadata) |
+| Running BPA validation before commit | Folder (validate what will go to git) |
+
+> **Warning**: Never "Save as folder" after "Open from DB" on TEST/UAT/PROD — this would
+> overwrite your git working copy with the production state, potentially losing pending changes.
+
+### Connecting Power BI Desktop to Local _DEV SSAS
+
+```
+Get Data → Analysis Services
+Server:   <ssas-dev-server-name>   or   localhost\TABULAR (if local)
+Database: EAO_Tabular_DEV
+Connection: Live connection
+```
+
+Power BI Desktop saves the SSAS server/database in the `.pbix` connection metadata. When the
+report is deployed to PBIRS, the ADO pipeline's `Deploy-PbixReports.ps1` script updates the
+data source connection to point to the environment's correct `_PROD` database.
+
+---
+
 ## Naming Conventions
 
 | Object | Convention | Example |
