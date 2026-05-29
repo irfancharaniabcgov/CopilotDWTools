@@ -1,163 +1,63 @@
-# SQLBI DAX Patterns — On-Premises SSAS Tabular Reference
+ SQLBI DAX Patterns — On-Premises SSAS Tabular Reference
 
-> **Target Stack:** SQL Server Analysis Services Tabular (on-prem, compatibility 1200–1600),  
-> Power BI Report Server (PBIRS) live connection, SQL Server 2016–2022 DW.  
-> No Azure. No Power BI Service. No Microsoft Fabric.
-
----
-
-## Table of Contents
-
-1. [Time Intelligence Patterns](#1-time-intelligence-patterns)
-2. [Semi-Additive Measures](#2-semi-additive-measures)
-3. [Many-to-Many Relationships](#3-many-to-many-relationships)
-4. [Calculation Groups (Compatibility 1500+)](#4-calculation-groups-compatibility-1500)
-5. [Disconnected Tables / Parameter Tables](#5-disconnected-tables--parameter-tables)
-6. [Ranking Patterns](#6-ranking-patterns)
-7. [Parent-Child Hierarchies](#7-parent-child-hierarchies)
-8. [USERELATIONSHIP — Role-Playing Dimensions](#8-userelationship--role-playing-dimensions)
-9. [ALLSELECTED Behaviour in Live Connection](#9-allselected-behaviour-in-live-connection)
-10. [Variables (VAR) — Performance in On-Prem SSAS](#10-variables-var--performance-in-on-prem-ssas)
-11. [Error Handling in DAX](#11-error-handling-in-dax)
-12. [Dynamic Security with Active Directory Groups](#12-dynamic-security-with-active-directory-groups)
-13. [Aggregation Tables (User-Defined, Compatibility 1500+)](#13-aggregation-tables-user-defined-compatibility-1500)
-14. [DAX for Paginated Report Parameters (PBIRS/SSRS)](#14-dax-for-paginated-report-parameters-pbirsssrs)
-15. [VertiPaq vs. Formula Engine Optimisation](#15-vertipaq-vs-formula-engine-optimisation)
-16. [Measure Quality Checklist](#16-measure-quality-checklist)
-17. [DAX Anti-Patterns](#17-dax-anti-patterns)
-18. [Measure Organisation Conventions](#18-measure-organisation-conventions)
-19. [Bus Matrix Validation in DAX](#19-bus-matrix-validation-in-dax)
+> **Stack:** SSAS Tabular on-prem (CL 1200–1600), PBIRS live connection, SQL Server 2016–2022.
+> No Azure / Power BI Service / Fabric.
 
 ---
 
 ## 1. Time Intelligence Patterns
 
-### Prerequisites
-- A dedicated `DimDate` table marked as a **Date Table** in SSAS (right-click → Mark as Date Table).
-- A single active relationship between the fact table date key and `DimDate[DateKey]`.
-- All time intelligence functions require a contiguous date table with no gaps.
+**Prerequisites:** `Calendar` marked as Date Table; single active relationship to fact date key; contiguous date range (no gaps).
 
 ```dax
--- Year-to-Date Sales
-Sales YTD :=
-CALCULATE(
-    [Total Sales],
-    DATESYTD( DimDate[Date] )
-)
+Sales YTD        := CALCULATE( [Total Sales], DATESYTD( Calendar[Date] ) )
+Sales MTD        := CALCULATE( [Total Sales], DATESMTD( Calendar[Date] ) )
+Sales QTD        := CALCULATE( [Total Sales], DATESQTD( Calendar[Date] ) )
+Sales SPLY       := CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
+Sales Prior Month := CALCULATE( [Total Sales], DATEADD( Calendar[Date], -1, MONTH ) )
+Sales FYTD       := CALCULATE( [Total Sales], DATESYTD( Calendar[Date], "6/30" ) ) -- fiscal end June
 
--- Rolling 12 Months (last 12 complete months, handles mid-month correctly)
+-- Rolling 12 months
 Sales R12M :=
-CALCULATE(
-    [Total Sales],
-    DATESINPERIOD(
-        DimDate[Date],
-        LASTDATE( DimDate[Date] ),
-        -12,
-        MONTH
-    )
-)
+CALCULATE( [Total Sales], DATESINPERIOD( Calendar[Date], LASTDATE( Calendar[Date] ), -12, MONTH ) )
 
--- Same Period Last Year
-Sales SPLY :=
-CALCULATE(
-    [Total Sales],
-    SAMEPERIODLASTYEAR( DimDate[Date] )
-)
-
--- Year-over-Year % Growth
+-- YoY % Growth
 Sales YoY % :=
-VAR CurrentYear = [Total Sales]
-VAR PriorYear   = [Sales SPLY]
-RETURN
-    DIVIDE( CurrentYear - PriorYear, PriorYear )
+VAR Curr = [Total Sales]
+VAR Prev = [Sales SPLY]
+RETURN DIVIDE( Curr - Prev, Prev )
 
--- Month-to-Date (robust against partial months in current period)
-Sales MTD :=
-CALCULATE(
-    [Total Sales],
-    DATESMTD( DimDate[Date] )
-)
-
--- Quarter-to-Date
-Sales QTD :=
-CALCULATE(
-    [Total Sales],
-    DATESQTD( DimDate[Date] )
-)
-
--- Prior Month comparison
-Sales Prior Month :=
-CALCULATE(
-    [Total Sales],
-    DATEADD( DimDate[Date], -1, MONTH )
-)
-
--- Fiscal Year YTD (fiscal year starts July 1)
-Sales FYTD :=
-CALCULATE(
-    [Total Sales],
-    DATESYTD( DimDate[Date], "6/30" )
-)
-```
-
-### Handling Future Dates — Blank vs. Zero
-```dax
--- Suppress blank future periods cleanly
-Sales YTD (No Future) :=
-IF(
-    ISBLANK( [Total Sales] ),
-    BLANK(),
-    [Sales YTD]
-)
+-- Suppress blank future periods
+Sales YTD (No Future) := IF( ISBLANK( [Total Sales] ), BLANK(), [Sales YTD] )
 ```
 
 ---
 
 ## 2. Semi-Additive Measures
 
-Use LASTNONBLANK / FIRSTNONBLANK for balances that should not be summed across time.
+Use `LASTNONBLANK`/`FIRSTNONBLANK` for balances that must not be summed across time.
 
 ```dax
--- Closing Balance (e.g., inventory, account balance)
 Closing Balance :=
-CALCULATE(
-    SUM( FactBalance[Balance] ),
-    LASTNONBLANK(
-        DimDate[Date],
-        CALCULATE( SUM( FactBalance[Balance] ) )
-    )
-)
+CALCULATE( SUM( Balance[Balance] ),
+    LASTNONBLANK( Calendar[Date], CALCULATE( SUM( Balance[Balance] ) ) ) )
 
--- Opening Balance (first non-blank in period)
 Opening Balance :=
-CALCULATE(
-    SUM( FactBalance[Balance] ),
-    FIRSTNONBLANK(
-        DimDate[Date],
-        CALCULATE( SUM( FactBalance[Balance] ) )
-    )
-)
+CALCULATE( SUM( Balance[Balance] ),
+    FIRSTNONBLANK( Calendar[Date], CALCULATE( SUM( Balance[Balance] ) ) ) )
 
--- Average Daily Balance (true average, not sum)
 Avg Daily Balance :=
-AVERAGEX(
-    VALUES( DimDate[Date] ),
-    CALCULATE( SUM( FactBalance[Balance] ) )
-)
+AVERAGEX( VALUES( Calendar[Date] ), CALCULATE( SUM( Balance[Balance] ) ) )
 ```
 
 ---
 
 ## 3. Many-to-Many Relationships
 
-### Bridge Table Pattern (Compatibility 1200+)
-Used for customer-account, employee-project, or product-category many-to-many scenarios.
+### Bridge Table (CL 1200+)
+Relationships: `Sales → BridgeCustomerGroup` (Both), `BridgeCustomerGroup → DimCustomer` (Single).
 
 ```dax
--- Many-to-many via bridge table
--- Relationships: FactSales → BridgeCustomerGroup (FilterDirection: Both)
---                BridgeCustomerGroup → DimCustomer (FilterDirection: Single)
-
 Sales M2M :=
 CALCULATE(
     [Total Sales],
@@ -168,120 +68,69 @@ CALCULATE(
 )
 ```
 
-### Native M2M (Compatibility 1500 — SSAS 2019/2022)
-At compatibility 1500+, you can set a relationship's cross-filter direction to **Both** directly. Avoid this for large tables — it can cause explosive filter expansion. Prefer explicit TREATAS for control.
+### Native M2M (CL 1500+)
+Set relationship cross-filter to **Both** directly. Avoid on large tables (explosive filter expansion). Prefer `TREATAS` for control.
 
 ---
 
-## 4. Calculation Groups (Compatibility 1500+)
+## 4. Calculation Groups (CL 1500+)
 
-> **Supported on:** SSAS Tabular 2019 (CL 1500) and SSAS Tabular 2022 (CL 1600).  
-> **Tool required:** Tabular Editor 2.x or 3.x (cannot be authored in SSDT/VS directly in older tooling).  
-> **Note:** Calculation Groups are NOT available at compatibility levels below 1500.
+> Requires `TabularEditor.exe` (Tabular Editor 2.x). Not available in SSDT. Not available below CL 1500.
 
-### Time Intelligence Calculation Group
 ```dax
 -- Calculation Item: "Actual"
 SELECTEDMEASURE()
 
 -- Calculation Item: "YTD"
-CALCULATE(
-    SELECTEDMEASURE(),
-    DATESYTD( DimDate[Date] )
-)
+CALCULATE( SELECTEDMEASURE(), DATESYTD( Calendar[Date] ) )
 
 -- Calculation Item: "SPLY"
-CALCULATE(
-    SELECTEDMEASURE(),
-    SAMEPERIODLASTYEAR( DimDate[Date] )
-)
+CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) )
 
 -- Calculation Item: "YoY %"
-VAR Current = CALCULATE( SELECTEDMEASURE() )
-VAR Prior   = CALCULATE(
-    SELECTEDMEASURE(),
-    SAMEPERIODLASTYEAR( DimDate[Date] )
-)
-RETURN
-DIVIDE( Current - Prior, Prior )
+VAR Curr = CALCULATE( SELECTEDMEASURE() )
+VAR Prev = CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) )
+RETURN DIVIDE( Curr - Prev, Prev )
 
 -- Calculation Item: "R12M"
-CALCULATE(
-    SELECTEDMEASURE(),
-    DATESINPERIOD(
-        DimDate[Date],
-        LASTDATE( DimDate[Date] ),
-        -12,
-        MONTH
-    )
-)
-```
+CALCULATE( SELECTEDMEASURE(), DATESINPERIOD( Calendar[Date], LASTDATE( Calendar[Date] ), -12, MONTH ) )
 
-### Format String Expressions (CL 1500+)
-```dax
--- On YoY % calculation item, set Format String Expression:
+-- Format String Expression on YoY % item:
 "0.0%"
 
--- On currency items:
-"£#,##0"
-```
-
-### Calculation Group Limitations on On-Prem SSAS
-| Feature | SSAS 2019 (CL 1500) | SSAS 2022 (CL 1600) |
-|---|---|---|
-| Calculation Groups | ✅ | ✅ |
-| Format String Expressions | ✅ | ✅ |
-| Precedence (multiple groups) | ✅ | ✅ |
-| Dynamic format strings on base measures | ❌ | ✅ |
-| CALCULATION() function | Limited | ✅ |
-| Authoring in SSDT | ❌ (need Tabular Editor) | ❌ (need Tabular Editor) |
-
-### Precedence Rules
-When using multiple calculation groups (e.g., Time Intelligence + Currency Conversion), set **Precedence** carefully. Lower number = higher precedence (evaluated last in filter context). Always test with `SELECTEDMEASURENAME()` for conditional logic:
-
-```dax
--- Calculation Item: apply only to measures that are currency-based
+-- Conditional: apply only to named measures (use SELECTEDMEASURENAME())
 IF(
     SELECTEDMEASURENAME() IN { "Total Sales", "Total Cost", "Gross Profit" },
-    CALCULATE(
-        SELECTEDMEASURE(),
-        SAMEPERIODLASTYEAR( DimDate[Date] )
-    ),
+    CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) ),
     SELECTEDMEASURE()
 )
 ```
+
+| Feature | CL 1500 (2019) | CL 1600 (2022) |
+|---|---|---|
+| Calculation Groups | ✅ | ✅ |
+| Format String Expressions | ✅ | ✅ |
+| Dynamic format on base measures | ❌ | ✅ |
+| CALCULATION() function | Limited | ✅ |
+| Authoring in SSDT | ❌ | ❌ |
+
+**Precedence:** Lower number = higher priority (evaluated last). When using multiple groups (e.g. Time Intelligence + Currency), set Precedence carefully and test with `SELECTEDMEASURENAME()`.
 
 ---
 
 ## 5. Disconnected Tables / Parameter Tables
 
-Used for what-if analysis, slicer-driven parameters, and dynamic measure switching.
-
 ```dax
--- DimScenario table (not related to any fact — imported as a standalone table)
--- Columns: ScenarioKey (1,2,3), ScenarioName ("Budget","Forecast","Actual")
-
+-- DimScenario: ScenarioKey (1/2/3), ScenarioName. Not related to any fact table.
 Selected Scenario Sales :=
-VAR SelectedKey = SELECTEDVALUE( DimScenario[ScenarioKey], 3 ) -- default: Actual
-RETURN
-SWITCH(
-    SelectedKey,
-    1, [Budget Sales],
-    2, [Forecast Sales],
-    3, [Actual Sales],
-    [Actual Sales]
-)
+VAR Sel = SELECTEDVALUE( DimScenario[ScenarioKey], 3 ) -- default: Actual
+RETURN SWITCH( Sel,
+    1, [Budget Sales], 2, [Forecast Sales], 3, [Actual Sales], [Actual Sales] )
 
--- Dynamic measure switching (no calculation groups available at CL 1200)
+-- Dynamic measure switch (use when calc groups unavailable at CL 1200)
 Dynamic KPI :=
-SWITCH(
-    SELECTEDVALUE( DimKPI[KPIKey] ),
-    1, [Total Sales],
-    2, [Total Cost],
-    3, [Gross Profit],
-    4, [Units Sold],
-    BLANK()
-)
+SWITCH( SELECTEDVALUE( DimKPI[KPIKey] ),
+    1, [Total Sales], 2, [Total Cost], 3, [Gross Profit], 4, [Units Sold], BLANK() )
 ```
 
 ---
@@ -289,531 +138,259 @@ SWITCH(
 ## 6. Ranking Patterns
 
 ```dax
--- Rank products by sales within current filter context
 Product Sales Rank :=
-IF(
-    ISBLANK( [Total Sales] ),
-    BLANK(),
-    RANKX(
-        ALLSELECTED( DimProduct[ProductName] ),
-        [Total Sales],
-        ,
-        DESC,
-        DENSE
-    )
-)
+IF( ISBLANK( [Total Sales] ), BLANK(),
+    RANKX( ALLSELECTED( DimProduct[ProductName] ), [Total Sales],, DESC, DENSE ) )
 
--- Top N filter measure (use in visual-level filter: [Is Top N] = 1)
+-- Top N filter (use in visual-level filter: [Is Top N] = 1)
 Is Top N :=
 VAR N = SELECTEDVALUE( DimTopN[N], 10 )
-RETURN
-IF( [Product Sales Rank] <= N, 1, 0 )
-
--- Percentile rank
-Product Sales Percentile :=
-DIVIDE(
-    RANKX( ALLSELECTED( DimProduct[ProductName] ), [Total Sales],, ASC, DENSE ) - 1,
-    COUNTROWS( ALLSELECTED( DimProduct[ProductName] ) ) - 1
-)
+RETURN IF( [Product Sales Rank] <= N, 1, 0 )
 ```
 
 ---
 
 ## 7. Parent-Child Hierarchies
 
-SSAS Tabular does not natively support ragged/recursive hierarchies. Use PATH functions to flatten them at model refresh time (computed columns).
+SSAS Tabular has no native ragged/recursive hierarchy support. Flatten using PATH computed columns at model refresh.
 
 ```dax
--- Computed columns on DimEmployee (add these as model computed columns)
-EmployeePath    = PATH( DimEmployee[EmployeeKey], DimEmployee[ManagerKey] )
-EmployeeDepth   = PATHLENGTH( DimEmployee[EmployeePath] )
-Level1Key       = PATHITEM( DimEmployee[EmployeePath], 1, INTEGER )
-Level2Key       = PATHITEM( DimEmployee[EmployeePath], 2, INTEGER )
-Level3Key       = PATHITEM( DimEmployee[EmployeePath], 3, INTEGER )
-Level4Key       = PATHITEM( DimEmployee[EmployeePath], 4, INTEGER )
+-- Computed columns on DimEmployee:
+EmployeePath  = PATH( DimEmployee[EmployeeKey], DimEmployee[ManagerKey] )
+EmployeeDepth = PATHLENGTH( DimEmployee[EmployeePath] )
+Level1Key     = PATHITEM( DimEmployee[EmployeePath], 1, INTEGER )
+Level2Key     = PATHITEM( DimEmployee[EmployeePath], 2, INTEGER )
+Level3Key     = PATHITEM( DimEmployee[EmployeePath], 3, INTEGER )
+Level1Name    = LOOKUPVALUE( DimEmployee[EmployeeName], DimEmployee[EmployeeKey], DimEmployee[Level1Key] )
+Level2Name    = LOOKUPVALUE( DimEmployee[EmployeeName], DimEmployee[EmployeeKey], DimEmployee[Level2Key] )
 
-Level1Name      = LOOKUPVALUE( DimEmployee[EmployeeName], DimEmployee[EmployeeKey], DimEmployee[Level1Key] )
-Level2Name      = LOOKUPVALUE( DimEmployee[EmployeeName], DimEmployee[EmployeeKey], DimEmployee[Level2Key] )
-
--- Measure: rollup all subordinates of selected employee
+-- Rollup all subordinates of selected employee
 Subordinate Sales :=
-CALCULATE(
-    [Total Sales],
-    FILTER(
-        DimEmployee,
-        PATHCONTAINS( DimEmployee[EmployeePath], MAX( DimEmployee[EmployeeKey] ) )
-    )
-)
+CALCULATE( [Total Sales],
+    FILTER( DimEmployee,
+        PATHCONTAINS( DimEmployee[EmployeePath], MAX( DimEmployee[EmployeeKey] ) ) ) )
 ```
 
 ---
 
 ## 8. USERELATIONSHIP — Role-Playing Dimensions
 
-### Pattern: Single Date Dimension with Multiple Fact Date Roles
-SSAS Tabular allows only **one active relationship** between any two tables. For role-playing date dimensions, create **multiple inactive relationships** and activate them with `USERELATIONSHIP`.
+Only one active relationship per table pair. Activate inactive relationships inside CALCULATE.
 
-**Model setup (in SSDT/Tabular Editor):**
-- `FactSales[OrderDateKey]` → `DimDate[DateKey]` **(ACTIVE)**
-- `FactSales[ShipDateKey]`  → `DimDate[DateKey]` **(INACTIVE)**
-- `FactSales[DueDateKey]`   → `DimDate[DateKey]` **(INACTIVE)**
+**Model:** `Sales[OrderDateKey] → Calendar[DateKey]` **(ACTIVE)**; ShipDateKey, DueDateKey **(INACTIVE)**.
 
 ```dax
--- Sales by Ship Date
 Sales by Ship Date :=
-CALCULATE(
-    [Total Sales],
-    USERELATIONSHIP( FactSales[ShipDateKey], DimDate[DateKey] )
-)
+CALCULATE( [Total Sales], USERELATIONSHIP( Sales[ShipDateKey], Calendar[DateKey] ) )
 
--- Sales by Due Date
-Sales by Due Date :=
-CALCULATE(
-    [Total Sales],
-    USERELATIONSHIP( FactSales[DueDateKey], DimDate[DateKey] )
-)
-
--- YTD by Ship Date (combine USERELATIONSHIP with time intelligence)
+-- Combine USERELATIONSHIP with time intelligence in same CALCULATE
 Sales Ship YTD :=
-CALCULATE(
-    [Total Sales],
-    USERELATIONSHIP( FactSales[ShipDateKey], DimDate[DateKey] ),
-    DATESYTD( DimDate[Date] )
-)
+CALCULATE( [Total Sales],
+    USERELATIONSHIP( Sales[ShipDateKey], Calendar[DateKey] ),
+    DATESYTD( Calendar[Date] ) )
 ```
 
-### Role-Playing with Multiple Date Dimensions (Alternative Pattern)
-For complex scenarios, maintain separate **view-based** date dimension tables in the model:
-`DimOrderDate`, `DimShipDate`, `DimDueDate` — all sourced from the same `DimDate` query but with aliases. This allows each to have its own active relationship and independent hierarchies, avoiding USERELATIONSHIP entirely. Preferred for models with heavy time intelligence usage on multiple date roles.
+**Alternative:** Use separate view-sourced tables (`DimOrderDate`, `DimShipDate`, `DimDueDate`) each with an active relationship. Preferred for heavy time intelligence on multiple date roles — no `USERELATIONSHIP` needed.
 
-```dax
--- With separate dimension tables — no USERELATIONSHIP needed
-Sales Ship YTD (Alt) :=
-CALCULATE(
-    [Total Sales],
-    DATESYTD( DimShipDate[Date] )   -- uses active relationship
-)
-```
-
-### Pitfalls with USERELATIONSHIP
-- `USERELATIONSHIP` **deactivates** the currently active relationship for the scope of the CALCULATE block.
-- Cannot use time intelligence functions that rely on the active relationship simultaneously without combining them in the same CALCULATE modifier list.
-- In SSAS on-prem, `USERELATIONSHIP` with bidirectional cross-filter can produce unexpected results — always set cross-filter to **Single** on inactive relationships.
+**Pitfalls:** `USERELATIONSHIP` deactivates the active relationship for the CALCULATE scope. Set cross-filter to **Single** on inactive relationships — bidirectional + USERELATIONSHIP causes unexpected results on-prem.
 
 ---
 
 ## 9. ALLSELECTED Behaviour in Live Connection
 
-> **Critical for PBIRS live connection reports.** Behaviour differs subtly from Power BI Desktop (import mode).
-
-### Context Propagation Rules
-| Function | What it clears | Live Connection behaviour |
+| Function | Clears | Live Connection |
 |---|---|---|
-| `ALL( Table )` | All filters on table from any source | ✅ Consistent |
-| `ALL( Column )` | All filters on that column | ✅ Consistent |
-| `ALLSELECTED( Column )` | Clears inner filters, preserves slicer/page filters | ⚠️ See notes below |
-| `ALLEXCEPT( Table, Col )` | All filters except named columns | ✅ Consistent |
+| `ALL( Table/Column )` | All filters | ✅ Consistent |
+| `ALLSELECTED( Column )` | Inner; preserves slicer/page | ⚠️ Varies by visual type |
+| `ALLEXCEPT( Table, Col )` | All except named | ✅ Consistent |
 
-### ALLSELECTED in Live Connection — Known Behaviours
-1. **ALLSELECTED respects the outermost query filter context** — in PBIRS live connection, the outer context is the MDX/DAX query sent by the report. This is generally equivalent to "what is selected in slicers on the page."
-2. **ALLSELECTED does NOT behave identically across visual types** — matrix visuals that generate sub-selects may produce a different ALLSELECTED scope than card visuals. Always test ranking measures in matrix visuals specifically.
-3. **Report page filters count as outer context** — a page-level filter applied in PBIRS on a live connection report is included in the outer ALLSELECTED scope, which is the correct behaviour.
-4. **No drillthrough context difference** — ALLSELECTED in a drillthrough target page uses the drillthrough filter as outer context, same as Power BI Service.
+**Key behaviours (PBIRS live connection):**
+- Outer context = slicer + page filters — ALLSELECTED respects these correctly.
+- Matrix sub-selects can produce a different ALLSELECTED scope than card visuals — always test ranking measures in matrix.
+- Avoid `ALLSELECTED( Table )` on tables with many inactive relationships — FE overhead on-prem.
 
 ```dax
--- Safe percentage-of-total using ALLSELECTED (works correctly in live connection matrix)
+-- % of total within slicer selection
 Sales % of Total :=
-DIVIDE(
-    [Total Sales],
-    CALCULATE( [Total Sales], ALLSELECTED( DimProduct[Category] ) )
-)
+DIVIDE( [Total Sales], CALCULATE( [Total Sales], ALLSELECTED( DimProduct[Category] ) ) )
 
--- Ranking within slicer selection (ALLSELECTED ensures rank resets to 1 within sliced set)
+-- Ranking within sliced set
 Product Rank (Sliced) :=
-RANKX(
-    ALLSELECTED( DimProduct[ProductName] ),
-    [Total Sales],
-    ,
-    DESC,
-    DENSE
-)
-
--- AVOID: using ALLSELECTED on a table with many inactive relationships
--- It can evaluate slowly on SSAS on-prem due to FE overhead
--- PREFER: ALLSELECTED on specific columns
+RANKX( ALLSELECTED( DimProduct[ProductName] ), [Total Sales],, DESC, DENSE )
 ```
 
-### ALLSELECTED vs. ALLEXCEPT — When to Use Each
-- Use `ALLSELECTED( Column )` for **visual-relative percentage of total** — you want slicers to restrict the denominator.
-- Use `ALL( Column )` for **absolute percentage of grand total** — slicers should NOT affect the denominator.
-- Use `ALLEXCEPT` when you need to **preserve specific dimension filters** while removing all others in a complex filter context.
+**When to use:** `ALLSELECTED( Column )` — visual-relative % (slicers restrict denominator). `ALL( Column )` — absolute % of grand total. `ALLEXCEPT` — preserve specific filters, remove all others.
 
 ---
 
 ## 10. Variables (VAR) — Performance in On-Prem SSAS
 
-### How Variables Work in the VertiPaq Engine
-In on-premises SSAS Tabular, a `VAR` expression is evaluated **once** when first referenced and its result is **cached for the duration of the measure evaluation**. This is fundamentally different from subexpressions written inline, which may be re-evaluated multiple times.
+`VAR` evaluates once and caches the result for the measure instance. Inline subexpressions may be evaluated multiple times (multiple SE queries).
 
 ```dax
--- ❌ AVOID: inline subexpressions evaluated multiple times
-Gross Margin % (Slow) :=
-DIVIDE(
-    SUM( FactSales[Revenue] ) - SUM( FactSales[Cost] ),
-    SUM( FactSales[Revenue] )
-)
--- SUM(FactSales[Revenue]) is evaluated TWICE — two SE queries
+-- ❌ SUM(Revenue) evaluated twice — two SE queries
+Gross Margin % (Slow) := DIVIDE( SUM( Sales[Revenue] ) - SUM( Sales[Cost] ), SUM( Sales[Revenue] ) )
 
--- ✅ PREFER: VAR caches the result — single SE query
-Gross Margin % (Fast) :=
-VAR Revenue = SUM( FactSales[Revenue] )
-VAR Cost    = SUM( FactSales[Cost] )
-RETURN
-    DIVIDE( Revenue - Cost, Revenue )
-```
+-- ✅ VAR — single SE query each
+Gross Margin % :=
+VAR Revenue = SUM( Sales[Revenue] )
+VAR Cost    = SUM( Sales[Cost] )
+RETURN DIVIDE( Revenue - Cost, Revenue )
 
-### VAR and Filter Context
-A critical rule: **VAR captures the filter context at the point it is declared**, not at the point it is used in RETURN. This enables clean "save and restore" filter context patterns:
+-- Context save pattern: VAR captures filter context at declaration point
+Sales YoY% :=
+VAR Curr = [Total Sales]
+VAR Prev = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
+RETURN DIVIDE( Curr - Prev, Prev )
 
-```dax
--- Classic context save pattern
-Prior Year Sales :=
-VAR CurrentYearSales = [Total Sales]          -- evaluated in current context
-VAR PYSales = CALCULATE(
-    [Total Sales],
-    SAMEPERIODLASTYEAR( DimDate[Date] )
-)
-RETURN
-    DIVIDE( CurrentYearSales - PYSales, PYSales )
-```
-
-### Performance Guidelines for On-Prem SSAS VAR Usage
-1. **Always use VAR for measures called more than once** in a RETURN expression.
-2. **VAR across CALCULATE boundaries:** A VAR declared outside a CALCULATE cannot be re-evaluated inside it — this is intentional and correct. If you need a value computed inside a modified filter context, compute it inside the CALCULATE, assign to a VAR, then use it.
-3. **Large SUMMARIZE results in VARs**: Storing large tables in VARs (e.g., `VAR T = SUMMARIZE(...)` over millions of rows) can consume significant VertiPaq memory. Keep table VARs as filtered as possible.
-4. **VARs are not materialised globally** — they are scoped to the measure evaluation instance. There is no cross-query VAR caching.
-
-```dax
--- Pattern: conditional calculation with VAR to avoid double evaluation
+-- Conditional with VAR (avoids double evaluation)
 Conditional Growth :=
-VAR Sales    = [Total Sales]
-VAR PYSales  = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( DimDate[Date] ) )
-VAR Growth   = DIVIDE( Sales - PYSales, PYSales )
-RETURN
-    IF( PYSales = 0 || ISBLANK( PYSales ), BLANK(), Growth )
+VAR Sales   = [Total Sales]
+VAR PYSales = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
+VAR Growth  = DIVIDE( Sales - PYSales, PYSales )
+RETURN IF( ISBLANK( PYSales ), BLANK(), IF( PYSales = 0, BLANK(), Growth ) )
 ```
+
+**Rules:**
+1. Use VAR for any subexpression referenced more than once.
+2. VAR captures context at declaration — compute inside CALCULATE if you need a modified context value in the VAR.
+3. Keep table VARs (`VAR T = SUMMARIZE(...)`) as filtered as possible — large table VARs consume VertiPaq memory.
+4. VARs are scoped to the measure evaluation instance — no cross-query caching.
 
 ---
 
 ## 11. Error Handling in DAX
 
-### Division by Zero
 ```dax
--- ✅ Always use DIVIDE() — never use "/" operator for measures
-Safe Ratio :=
-DIVIDE( [Numerator Measure], [Denominator Measure] )
--- Returns BLANK() when denominator is 0 or BLANK
+-- ✅ Always DIVIDE() — never / operator
+Safe Ratio            := DIVIDE( [Numerator], [Denominator] )       -- returns BLANK on zero
+Safe Ratio (0 default) := DIVIDE( [Numerator], [Denominator], 0 )
 
--- DIVIDE with explicit alternate result
-Safe Ratio (Zero Default) :=
-DIVIDE( [Numerator Measure], [Denominator Measure], 0 )
+-- ❌ Avoid — errors in reports
+Unsafe Ratio := [Numerator] / [Denominator]
 
--- ❌ AVOID — will show error in report
-Unsafe Ratio := [Numerator Measure] / [Denominator Measure]
-```
-
-### IFERROR and ISERROR
-```dax
--- IFERROR wraps any expression and returns alternate on error
+-- IFERROR for lookup fallbacks
 Safe Lookup :=
-IFERROR(
-    LOOKUPVALUE(
-        DimProduct[StandardCost],
-        DimProduct[ProductKey],
-        MAX( FactSales[ProductKey] )
-    ),
-    0
-)
+IFERROR( LOOKUPVALUE( DimProduct[StandardCost], DimProduct[ProductKey], MAX( Sales[ProductKey] ) ), 0 )
 
--- ISERROR for conditional logic (slightly more expensive than IFERROR)
-Has Valid Price :=
-IF(
-    ISERROR( LOOKUPVALUE( DimProduct[Price], DimProduct[ProductKey], MAX( FactSales[ProductKey] ) ) ),
-    FALSE,
-    TRUE
-)
+-- ISBLANK (preferred over = BLANK() for measures)
+Has Sales := NOT ISBLANK( [Total Sales] )
 
--- ISBLANK — preferred over = BLANK() for measures
-Has Sales :=
-NOT ISBLANK( [Total Sales] )
+-- COALESCE: first non-blank value (CL 1550+ / SSAS 2022 only)
+-- For CL 1500: use nested IF( ISBLANK(...), ..., ... ) instead
+Effective Price        := COALESCE( [Override Price], [Standard Price], 0 )
+Product Category Safe  := COALESCE( SELECTEDVALUE( DimProduct[Category] ), "Unknown" )
+
+-- Return BLANK (not 0) for no-match rows — cleaner in visuals
+Total Sales (Clean) := IF( COUNTROWS( Sales ) = 0, BLANK(), SUM( Sales[SalesAmount] ) )
 ```
-
-### Handling Missing Dimension Members
-```dax
--- Return BLANK (not zero) when no matching rows — cleaner in visuals
-Total Sales (Clean) :=
-IF(
-    COUNTROWS( FactSales ) = 0,
-    BLANK(),
-    SUM( FactSales[SalesAmount] )
-)
-
--- Substitute unknown member label
-Product Category Safe :=
-COALESCE( SELECTEDVALUE( DimProduct[Category] ), "Unknown" )
-```
-
-### COALESCE (Compatibility 1550+ / SSAS 2022)
-```dax
--- COALESCE returns first non-blank/non-null value (cleaner than nested IF ISBLANK)
-Effective Price :=
-COALESCE( [Override Price], [Standard Price], 0 )
-```
-
-> **Note:** `COALESCE` was introduced at model compatibility 1550 (SSAS 2022 or later cumulative updates). For SSAS 2019 (CL 1500), use nested `IF( ISBLANK(...), ..., ... )` instead.
 
 ---
 
 ## 12. Dynamic Security with Active Directory Groups
 
-### On-Prem SSAS: USERNAME() vs. USERPRINCIPALNAME()
-| Function | Returns | On-Prem SSAS Behaviour |
-|---|---|---|
-| `USERNAME()` | `DOMAIN\username` (NetBIOS format) | ✅ Correct for Windows Auth |
-| `USERPRINCIPALNAME()` | `user@domain.com` (UPN format) | ⚠️ Returns same as USERNAME() on-prem in most cases; may return BLANK() |
+**Always use `USERNAME()`** (returns `DOMAIN\username`). `USERPRINCIPALNAME()` is unreliable on-prem SSAS — designed for Azure AS.
 
-> **On-prem SSAS always uses `USERNAME()`** — this returns the Windows identity in `DOMAIN\username` format. `USERPRINCIPALNAME()` was designed for Azure AS / Power BI Service and is unreliable on-prem. Always use `USERNAME()` for SSAS on-premises security.
-
-### Row-Level Security with AD Group Membership
-
-**Option A: User table with explicit assignments**
 ```dax
--- DimUserSecurity table: UserName (DOMAIN\user), RegionKey
-[RLS Region Filter] :=
-LOOKUPVALUE(
-    DimUserSecurity[RegionKey],
-    DimUserSecurity[UserName],
-    USERNAME()
-)
-
--- Role DAX filter on DimRegion table:
+-- Option A: User table (DimUserSecurity: UserName, RegionKey)
+-- Role filter on DimRegion:
 DimRegion[RegionKey] = LOOKUPVALUE(
-    DimUserSecurity[RegionKey],
-    DimUserSecurity[UserName],
-    USERNAME()
-)
-```
+    DimUserSecurity[RegionKey], DimUserSecurity[UserName], USERNAME() )
 
-**Option B: AD Group-based security (group → permission mapping)**
-```dax
--- DimSecurityGroup table: GroupName (DOMAIN\groupname), RegionKey
--- DimUserGroup bridge table: UserName, GroupName (populated by ETL from AD)
-
--- Role DAX filter on DimRegion:
+-- Option B: AD Group bridge (DimUserGroup: UserName, GroupName; refreshed from AD nightly)
 [RegionKey] IN
     CALCULATETABLE(
         VALUES( DimSecurityGroup[RegionKey] ),
         TREATAS(
-            CALCULATETABLE(
-                VALUES( DimUserGroup[GroupName] ),
-                DimUserGroup[UserName] = USERNAME()
-            ),
+            CALCULATETABLE( VALUES( DimUserGroup[GroupName] ), DimUserGroup[UserName] = USERNAME() ),
             DimSecurityGroup[GroupName]
         )
     )
-```
 
-### Dynamic RLS — Separate Security Table per Role
-```dax
--- Universal RLS filter (handles both user-specific and group-based assignments)
--- SecurityPermission table: Principal (DOMAIN\user or DOMAIN\group), EntityKey, EntityType
-
--- Role filter on DimBranch:
+-- Universal filter (SecurityPermission: Principal, EntityKey, EntityType)
 DimBranch[BranchKey] IN
-    CALCULATETABLE(
-        VALUES( SecurityPermission[EntityKey] ),
+    CALCULATETABLE( VALUES( SecurityPermission[EntityKey] ),
         SecurityPermission[Principal] = USERNAME(),
-        SecurityPermission[EntityType] = "Branch"
-    )
+        SecurityPermission[EntityType] = "Branch" )
 ```
 
-### AD Group Refresh Strategy
-The bridge table `DimUserGroup` must be refreshed by an SSIS/SQL Agent job that queries Active Directory. Use `System.DirectoryServices.DirectorySearcher` in a Script Task or `OPENQUERY` via a linked server to AD LDS. Refresh frequency should match AD group change frequency — typically nightly.
+**AD group bridge refresh:** SSIS/SQL Agent job querying AD via `System.DirectoryServices.DirectorySearcher` or linked server. Refresh nightly.
 
-### Testing RLS in SSAS
-In SSMS, connect to SSAS and use:
-```
--- Effective permissions test
-EXECUTE AS USER = 'DOMAIN\testuser'
-```
-Or in DAX Studio, use the **Roles** connection option to impersonate a specific Windows user.
+**Test RLS:** In DAX Studio, use Roles connection option. In SSMS: `EXECUTE AS USER = 'DOMAIN\testuser'`.
 
 ---
 
-## 13. Aggregation Tables (User-Defined, Compatibility 1500+)
+## 13. Aggregation Tables (User-Defined, CL 1500+)
 
-> **Distinct from Power BI Premium automatic aggregations.** On-prem SSAS 1500+ supports **user-defined aggregations** configured manually via Tabular Editor or SSMS scripting. There are no automatic aggregations in on-prem SSAS.
+> On-prem SSAS has **no automatic aggregations** — configure manually via `TabularEditor.exe`.
 
-### When to Use Aggregation Tables
-- Fact tables exceeding **50–100 million rows** where common summary queries (by month, by region, by category) run slowly.
-- Queries that consistently group by 2–3 dimensions at a high grain.
-- When VertiPaq memory pressure is high and you want to reduce scan volume.
+**Use when:** fact table >50–100M rows with repeating summary queries at coarser grain (month/region/category).
 
-### Setting Up an Aggregation Table
-
-**Step 1: Create the aggregation table in the DW**
 ```sql
--- Materialized aggregation in SQL Server DW
-CREATE TABLE dbo.FactSales_Agg_MonthRegion (
-    DateMonthKey    INT         NOT NULL,
-    RegionKey       INT         NOT NULL,
-    ProductCatKey   INT         NOT NULL,
-    TotalSales      DECIMAL(18,2) NOT NULL,
-    TotalCost       DECIMAL(18,2) NOT NULL,
-    TotalUnits      INT         NOT NULL,
+-- Step 1: Create agg table in DW (refreshed nightly)
+CREATE TABLE [Fact].[Sales_Agg_MonthRegion] (
+    DateMonthKey  INT          NOT NULL,
+    RegionKey     INT          NOT NULL,
+    ProductCatKey INT          NOT NULL,
+    TotalSales    DECIMAL(18,2) NOT NULL,
+    TotalCost     DECIMAL(18,2) NOT NULL,
+    TotalUnits    INT          NOT NULL,
     CONSTRAINT PK_FactSales_Agg PRIMARY KEY (DateMonthKey, RegionKey, ProductCatKey)
 );
 
--- Populate (refreshed by SSIS/SQL Agent nightly)
-INSERT INTO dbo.FactSales_Agg_MonthRegion
-SELECT
-    d.MonthKey          AS DateMonthKey,
-    f.RegionKey,
-    p.CategoryKey       AS ProductCatKey,
-    SUM(f.SalesAmount)  AS TotalSales,
-    SUM(f.CostAmount)   AS TotalCost,
-    SUM(f.Units)        AS TotalUnits
-FROM dbo.FactSales f
-JOIN dbo.DimDate    d ON f.DateKey    = d.DateKey
-JOIN dbo.DimProduct p ON f.ProductKey = p.ProductKey
+INSERT INTO [Fact].[Sales_Agg_MonthRegion]
+SELECT d.MonthKey, f.RegionKey, p.CategoryKey,
+    SUM(f.SalesAmount), SUM(f.CostAmount), SUM(f.Units)
+FROM dbo.Sales f
+JOIN dbo.Calendar    d ON f.DateKey    = d.DateKey
+JOIN [Dimension].[Product] p ON f.ProductKey = p.ProductKey
 GROUP BY d.MonthKey, f.RegionKey, p.CategoryKey;
 ```
 
-**Step 2: Import the aggregation table into the SSAS Tabular model**
-
-**Step 3: Configure aggregation via Tabular Editor (BIM metadata)**
-
-In Tabular Editor, on the `FactSales_Agg_MonthRegion` table:
-- Set **Table Behaviour → Column mappings** to `Summarize` for each measure column.
-- Set **Alternative Source** pointer from detail table columns to aggregation columns.
-- The engine will automatically hit the aggregation when queries match the granularity.
-
 ```json
-// Partial BIM annotation (Tabular Editor JSON)
+// Step 2: In Tabular Editor — set alternateOf on agg table columns (partial BIM)
 {
-  "name": "FactSales_Agg_MonthRegion",
-  "isHidden": true,
-  "partitions": [...],
-  "columns": [
-    {
-      "name": "TotalSales",
-      "dataType": "decimal",
-      "summarizeBy": "sum",
-      "alternateOf": {
-        "tableName": "FactSales",
-        "columnName": "SalesAmount",
-        "summarization": "Sum"
-      }
-    }
-  ]
+  "name": "TotalSales", "summarizeBy": "sum",
+  "alternateOf": { "tableName": "Sales", "columnName": "SalesAmount", "summarization": "Sum" }
 }
 ```
 
-### Aggregation Table Design Rules
-1. The aggregation table must be **hidden** in the model — it should never appear in report field lists.
-2. Relationships from aggregation table to dimensions must mirror the detail fact table relationships.
-3. The aggregation grain must be **coarser than or equal to** the detail fact table grain.
-4. Monitor whether queries actually use the aggregation via **DAX Studio Server Timings** — look for `VertiPaq Scan` hitting the aggregation table name.
+**Rules:** Agg table must be **hidden**. Grain ≥ detail fact grain. Relationships mirror detail fact. Verify via DAX Studio Server Timings → `VertiPaq Scan` hitting agg table name.
 
 ---
 
 ## 14. DAX for Paginated Report Parameters (PBIRS/SSRS)
 
-When PBIRS Paginated Reports (SSRS) connect to a Tabular model via MDX or DAX dataset, specific patterns apply for parameterised queries.
-
-### DAX Dataset for SSRS Paginated Reports
-SSRS paginated reports can use **DAX as dataset query language** when the data source is an SSAS Tabular model.
+Use `@ParamName` syntax in SSRS dataset query text mode. Use integer year/month params to avoid date parsing issues.
 
 ```dax
--- DAX query for an SSRS dataset (sales by product for a given date range)
--- @StartDate and @EndDate are SSRS report parameters passed as DAX variables
+-- Parameterised dataset (params: @StartYear, @StartMonth, @EndYear, @EndMonth)
 EVALUATE
 CALCULATETABLE(
     SUMMARIZECOLUMNS(
-        DimProduct[ProductName],
-        DimProduct[Category],
-        DimDate[CalendarYear],
-        DimDate[MonthName],
-        "Total Sales",   [Total Sales],
-        "Total Cost",    [Total Cost],
-        "Gross Profit",  [Gross Profit],
-        "Units Sold",    [Units Sold]
+        DimProduct[ProductName], DimProduct[Category],
+        Calendar[CalendarYear], Calendar[MonthName],
+        "Total Sales", [Total Sales], "Total Cost", [Total Cost],
+        "Gross Profit", [Gross Profit], "Units Sold", [Units Sold]
     ),
-    DimDate[Date] >= DATE(@StartYear, @StartMonth, 1),
-    DimDate[Date] <= DATE(@EndYear, @EndMonth, 31)
+    Calendar[Date] >= DATE(@StartYear, @StartMonth, 1),
+    Calendar[Date] <= DATE(@EndYear, @EndMonth, 31)
 )
-ORDER BY DimDate[CalendarYear], DimDate[MonthName], DimProduct[ProductName]
-```
+ORDER BY Calendar[CalendarYear], Calendar[MonthName], DimProduct[ProductName]
 
-> **SSRS parameter binding note:** SSRS report parameters map to DAX query parameters using `@ParamName` syntax. In the SSRS dataset query designer, switch to **text mode** and write the DAX query directly. Use integer parameters for year/month to avoid date parsing issues.
+-- Measure selector (@MeasureSelector: 1=Sales, 2=Cost, 3=Profit)
+EVALUATE CALCULATETABLE(
+    ADDCOLUMNS( SUMMARIZE( DimProduct, DimProduct[ProductName], DimProduct[Category] ),
+        "Value", SWITCH( @MeasureSelector, 1, [Total Sales], 2, [Total Cost], 3, [Gross Profit], [Total Sales] ) ) )
 
-### MDX for Paginated Reports (Alternative)
-SSRS has longer history with MDX against SSAS. For complex hierarchical reports (ragged hierarchies, subtotals), MDX is often more reliable than DAX for paginated output:
+-- Cascading param: years with data
+EVALUATE SUMMARIZECOLUMNS( Calendar[CalendarYear], "HasData", CALCULATE( COUNTROWS( Sales ) ) )
+ORDER BY Calendar[CalendarYear] ASC
 
-```mdx
--- MDX dataset for SSRS (product sales by category with subtotals)
-SELECT
-    NON EMPTY {
-        [Measures].[Total Sales],
-        [Measures].[Total Cost],
-        [Measures].[Gross Profit]
-    } ON COLUMNS,
-    NON EMPTY {
-        [DimProduct].[Category].[Category].MEMBERS *
-        [DimProduct].[ProductName].[ProductName].MEMBERS
-    } ON ROWS
-FROM [SalesTabularModel]
-WHERE (
-    [DimDate].[CalendarYear].&[@StartYear]
-)
-```
-
-### Parameterised Measure Selection
-```dax
--- SSRS report with a @MeasureSelector parameter (values: 1=Sales, 2=Cost, 3=Profit)
--- DAX dataset query:
-EVALUATE
-CALCULATETABLE(
-    ADDCOLUMNS(
-        SUMMARIZE( DimProduct, DimProduct[ProductName], DimProduct[Category] ),
-        "Selected Value",
-        SWITCH(
-            @MeasureSelector,
-            1, [Total Sales],
-            2, [Total Cost],
-            3, [Gross Profit],
-            [Total Sales]
-        )
-    )
-)
-```
-
-### Cascading Parameters Pattern
-```dax
--- Dataset 1: Available years (for @Year parameter dropdown)
-EVALUATE
-SUMMARIZECOLUMNS(
-    DimDate[CalendarYear],
-    "Has Data", CALCULATE( COUNTROWS( FactSales ) )
-)
-ORDER BY DimDate[CalendarYear] ASC
-
--- Dataset 2: Available regions for selected year (for @Region parameter dropdown)
-EVALUATE
-CALCULATETABLE(
+-- Cascading: regions for selected year
+EVALUATE CALCULATETABLE(
     SUMMARIZECOLUMNS( DimRegion[RegionName], DimRegion[RegionKey] ),
-    DimDate[CalendarYear] = @SelectedYear
-)
+    Calendar[CalendarYear] = @SelectedYear )
 ORDER BY DimRegion[RegionName]
 ```
 
@@ -821,96 +398,45 @@ ORDER BY DimRegion[RegionName]
 
 ## 15. VertiPaq vs. Formula Engine Optimisation
 
-### Architecture Overview
-SSAS Tabular's DAX engine has two components:
+| Component | Role | Parallelism |
+|---|---|---|
+| **Storage Engine (SE)** | Scans VertiPaq columnar data; simple aggregations | ✅ Multi-threaded |
+| **Formula Engine (FE)** | DAX logic, iterators, context transitions | ❌ Single-threaded |
 
-| Component | Abbreviation | Role | Parallelism |
-|---|---|---|---|
-| **Storage Engine** | SE | Scans compressed VertiPaq columnar data; executes simple aggregations | ✅ Multi-threaded |
-| **Formula Engine** | FE | Evaluates DAX logic, iterators (X functions), context transitions | ❌ Single-threaded |
+**Golden rule:** Push work to SE. FE bottleneck = no benefit from extra CPU.
 
-**Golden rule:** Push as much work as possible to the SE. If the FE is the bottleneck, the query will not benefit from additional CPU cores.
-
-### Diagnosing SE vs. FE Bottleneck — DAX Studio Server Timings
-
-1. Open **DAX Studio**, connect to SSAS on-prem instance.
-2. Enable **Server Timings** (Query menu → Server Timings).
-3. Run the measure/query.
-4. Read the Server Timings pane:
-   - **SE CPU**: time spent in Storage Engine scans.
-   - **FE**: time spent in Formula Engine logic.
-   - **Total**: wall-clock time.
-   - **SE Queries**: number of storage engine cache hits vs. misses.
-   - **Cache Hits**: high cache hits = good; measure has benefited from previous query caching.
+**Diagnose in DAX Studio:** Server Timings → SE CPU vs. FE time. SE-dominant (≥80% SE) = good.
+High FE + many SE Queries = `Callback DataID` (SE calling FE per row).
+Caused by: measures inside FILTER/SUMX, nested iterators, measures referencing measures in row context.
 
 ```
-Example Server Timings output (good — SE-dominant):
-  Total:    450ms
-  SE CPU:   420ms  (93% — SE doing the work, parallelised)
-  FE:        30ms
-  SE Queries: 4 (3 cache hits, 1 cache miss)
-
-Example Server Timings output (bad — FE-dominant):
-  Total:   3,200ms
-  SE CPU:    80ms
-  FE:      3,120ms  (98% — all work in single-threaded FE)
-  SE Queries: 847   (excessive SE callouts from iterator)
+Good (SE-dominant): Total 450ms | SE 420ms (93%) | FE 30ms | SE Queries: 4
+Bad  (FE-dominant): Total 3200ms | SE 80ms | FE 3120ms (98%) | SE Queries: 847
 ```
 
-### SE Query Types
-DAX Studio shows individual SE queries in the **Query Plan** tab:
-- **VertiPaq Scan**: direct columnar scan — efficient, parallelised.
-- **Lookup**: key-value lookup — efficient.
-- **Join**: cross-table join within SE — efficient up to moderate cardinality.
-- **Callback DataID**: SE calls back to FE for a computed value — **expensive**, breaks parallelism.
-
-> **CallbackDataID is the primary enemy of SE performance.** It occurs when the SE cannot evaluate an expression itself and must call the FE for each row. Common causes: nested iterators, complex IF logic inside SUMX/FILTER, measures referencing other measures inside row context.
-
-### Patterns That Force FE (Avoid or Refactor)
 ```dax
--- ❌ FILTER with measure reference — forces FE
-Bad Filter :=
-CALCULATE(
-    [Total Sales],
-    FILTER( DimProduct, [Product Margin %] > 0.2 )  -- measure inside FILTER → FE per row
-)
+-- ❌ FILTER with measure — FE per row (CallbackDataID)
+CALCULATE( [Total Sales], FILTER( DimProduct, [Product Margin %] > 0.2 ) )
 
--- ✅ FILTER with column expression — stays in SE
-Good Filter :=
-CALCULATE(
-    [Total Sales],
-    FILTER( DimProduct, DimProduct[StandardMargin] > 0.2 )  -- column → SE scan
-)
+-- ✅ FILTER with column — stays in SE
+CALCULATE( [Total Sales], FILTER( DimProduct, DimProduct[StandardMargin] > 0.2 ) )
 
--- ❌ SUMX over large table with complex per-row logic
-Slow SUMX :=
-SUMX(
-    FactSales,
-    FactSales[Qty] * LOOKUPVALUE( DimProduct[Price], DimProduct[ProductKey], FactSales[ProductKey] )
-)
--- Better: materialise [Price] as a column in FactSales via model relationship or DW ETL
+-- ❌ SUMX + LOOKUPVALUE per row — FE
+SUMX( Sales, Sales[Qty] * LOOKUPVALUE( DimProduct[Price], DimProduct[ProductKey], Sales[ProductKey] ) )
 
--- ✅ Prefer SUM over pre-calculated column
-Fast SUM := SUM( FactSales[PreCalcRevenue] )
+-- ✅ Pre-calculated column or relationship
+Fast SUM := SUM( Sales[PreCalcRevenue] )
 ```
 
-### VertiPaq Compression Tips (Improve SE Speed)
-1. **Sort tables by the column with highest cardinality** (in partition query ORDER BY) — VertiPaq run-length encodes sorted columns more efficiently.
-2. **Reduce column cardinality** where possible — avoid storing full timestamps when date-only is sufficient; avoid free-text columns in the model.
-3. **Avoid duplicating high-cardinality columns** across fact tables — use keys and join at query time via relationships.
-4. **Use integer keys** rather than string keys — integer dictionary encoding is more compact.
+**VertiPaq compression tips:**
+1. Sort partition query `ORDER BY` highest-cardinality column — better run-length encoding.
+2. Avoid full timestamps when date-only sufficient; avoid free-text model columns.
+3. Use integer keys, not string keys.
 
-### Key DMV Queries for VertiPaq Analysis
 ```dax
--- Memory usage by table/column (run in DAX Studio against SSAS instance)
-SELECT
-    CATALOG_NAME,
-    CUBE_NAME,
-    MEASURE_GROUP_NAME AS TableName,
-    ATTRIBUTE_NAME     AS ColumnName,
-    ROWS_COUNT,
-    USED_SIZE          AS MemoryBytes,
-    DICTIONARY_SIZE    AS DictionaryBytes
+-- DMV: memory by column (DAX Studio → DMV mode against SSAS)
+SELECT MEASURE_GROUP_NAME AS TableName, ATTRIBUTE_NAME AS ColumnName,
+    ROWS_COUNT, USED_SIZE AS MemoryBytes, DICTIONARY_SIZE
 FROM $SYSTEM.DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS
 ORDER BY USED_SIZE DESC
 ```
@@ -919,20 +445,18 @@ ORDER BY USED_SIZE DESC
 
 ## 16. Measure Quality Checklist
 
-Before deploying any measure to production SSAS:
-
-- [ ] Uses `DIVIDE()` — not `/` operator — for all divisions
-- [ ] Returns `BLANK()` (not 0) when there is no data — avoids misleading zero in visuals
-- [ ] Tested in a matrix visual with row/column/page/slicer filters active
-- [ ] Tested with no filters (grand total row) — grand total formula is correct
-- [ ] VAR used for any subexpression referenced more than once
-- [ ] No `FILTER( AllTable, [Measure] > x )` — replaced with column filter or KEEPFILTERS
-- [ ] Format string set explicitly (not left as "Auto")
-- [ ] Description populated in the measure properties
-- [ ] Assigned to correct Display Folder
-- [ ] Tested with DAX Studio Server Timings — FE time is not dominant
+- [ ] `DIVIDE()` — not `/` — for all divisions
+- [ ] Returns `BLANK()` (not 0) when no data
+- [ ] Tested in matrix visual with row/column/page/slicer filters active
+- [ ] Tested at grand total (no filters)
+- [ ] `VAR` for any subexpression used more than once
+- [ ] No `FILTER( AllTable, [Measure] > x )` — column filter or KEEPFILTERS instead
+- [ ] Format string set explicitly (not "Auto")
+- [ ] Description populated in measure properties
+- [ ] Assigned to Display Folder
+- [ ] Server Timings checked in DAX Studio — FE time not dominant
 - [ ] RLS-sensitive measures tested with impersonation in DAX Studio
-- [ ] Time intelligence measures tested at year/quarter/month/day grain
+- [ ] Time intelligence tested at year / quarter / month / day grain
 
 ---
 
@@ -940,16 +464,15 @@ Before deploying any measure to production SSAS:
 
 | Anti-Pattern | Problem | Fix |
 |---|---|---|
-| `SUM(Col) / SUM(Col2)` | Division by zero error | Use `DIVIDE()` |
-| `FILTER( Table, [Measure] > x )` | Forces FE, one SE callout per row | Filter on a column, not a measure |
-| `CALCULATE( X, ALL( Table ) )` inside an iterator | Removes all filters globally; unexpected for the user | Use `REMOVEFILTERS()` with scope, or `ALLEXCEPT` |
-| `COUNTROWS( FILTER( Table, condition ) )` | Iterates entire table | Use `CALCULATE( COUNTROWS(Table), condition )` |
-| Nested `CALCULATE` with no additive modifiers | Confusing; inner CALCULATE often redundant | Flatten into one CALCULATE |
-| `IF( SUM() = 0, BLANK(), ... )` | `SUM()` returns `BLANK()` not 0 when no rows — condition may fail | Use `IF( ISBLANK( [Measure] ), BLANK(), ... )` or `IF( [Measure] = 0 || ISBLANK([Measure]), ...)` |
-| `RELATED()` inside a measure | Only valid in row context — throws error in filter context | Use `LOOKUPVALUE()` or restructure with TREATAS |
-| Calculated columns for values derivable by measures | Wastes VertiPaq memory; re-evaluated on every process | Use measures; only use calculated columns for grouping/slicing attributes |
-| Unused columns imported into model | Bloats VertiPaq memory; slows SSAS processing | Remove from model or mark as Hidden and exclude from partitions |
-| `FORMAT()` inside a measure body | Returns a text string; cannot be used in numeric aggregations | Apply format strings via Format property, not FORMAT() function in calculation |
+| `SUM(Col) / SUM(Col2)` | Division by zero error | `DIVIDE()` |
+| `FILTER( Table, [Measure] > x )` | FE per row (CallbackDataID) | Filter on column, not measure |
+| `CALCULATE( X, ALL( Table ) )` in iterator | Removes all filters globally | `REMOVEFILTERS()` with scope or `ALLEXCEPT` |
+| `COUNTROWS( FILTER( Table, cond ) )` | Iterates full table in FE | `CALCULATE( COUNTROWS(Table), cond )` |
+| `IF( SUM() = 0, BLANK(), ... )` | `SUM()` returns BLANK not 0 when no rows | `IF( ISBLANK( [Measure] ), BLANK(), ... )` |
+| `RELATED()` inside measure | Only valid in row context | `LOOKUPVALUE()` or TREATAS |
+| Calculated columns for derivable values | Materialised in VertiPaq; wastes memory | Use measures; calc cols only for grouping/slicing |
+| Unused columns imported | Bloats memory; slows processing | Remove or exclude from partition query |
+| `FORMAT()` inside measure body | Returns text; breaks numeric aggregations | Use Format String property instead |
 
 ---
 
@@ -957,74 +480,40 @@ Before deploying any measure to production SSAS:
 
 ### Display Folder Structure
 ```
-📁 [Key Metrics]
-    Total Sales
-    Total Cost
-    Gross Profit
-    Gross Margin %
-📁 [Time Intelligence]
-    Sales YTD
-    Sales MTD
-    Sales SPLY
-    Sales YoY %
-    Sales R12M
-📁 [Ratios & Rates]
-    Avg Transaction Value
-    Conversion Rate
-    Return Rate %
-📁 [Inventory]
-    Closing Stock
-    Opening Stock
-    Stock Turns
-📁 [_Debug]          ← hidden folder; visible to developers only
-    _Debug Row Count
-    _Debug Context Test
+📁 [Key Metrics]       Total Sales, Total Cost, Gross Profit, Gross Margin %
+📁 [Time Intelligence] Sales YTD, MTD, SPLY, YoY %, R12M
+📁 [Ratios & Rates]    Avg Transaction Value, Conversion Rate, Return Rate %
+📁 [Inventory]         Closing Stock, Opening Stock, Stock Turns
+📁 [_Debug]            _Debug Row Count, _Debug Context Test  ← hidden; devs only
 ```
 
 ### Naming Conventions
-- **Plain name** for base measures: `Total Sales`, `Units Sold`
-- **Suffix** for time intelligence variants: `Sales YTD`, `Sales SPLY`, `Sales YoY %`
-- **Prefix underscore** for helper/debug measures: `_Sales Base`, `_Has Filter`
-- **No abbreviations** in public measure names — spell out in full
-- **Consistent capitalisation**: Title Case for all measure names
+- Base measures: `Total Sales`, `Units Sold` — plain Title Case
+- Time intelligence: `Sales YTD`, `Sales SPLY`, `Sales YoY %` — suffix variant
+- Helper/debug: `_Sales Base`, `_Has Filter` — underscore prefix
+- No abbreviations in public names; no `FORMAT()` in bodies
 
-### Documentation via Description Property
-Every production measure must have a populated Description:
-```
-Total Sales
-  Description: "Sum of SalesAmount from FactSales. Includes all channels.
-                Excludes cancelled orders (OrderStatus = 'Cancelled' filtered in partition).
-                Last reviewed: 2024-01-15 by [Author]."
-```
+### Description (every production measure)
+`"Sum of Sales[SalesAmount]. Includes all channels. Excludes cancelled orders (OrderStatus='Cancelled' filtered at partition). Last reviewed: YYYY-MM-DD by [Author]."`
 
 ---
 
 ## 19. Bus Matrix Validation in DAX
 
-The bus matrix defines which dimensions are conformed across fact tables. Use these measures to verify conformance in the model:
-
 ```dax
--- Validate that DimProduct joins correctly to both FactSales and FactReturns
+-- Verify DimProduct conforms across both fact tables
 Product in Sales Count :=
-CALCULATE(
-    DISTINCTCOUNT( FactSales[ProductKey] ),
-    ALLEXCEPT( DimProduct, DimProduct[ProductKey] )
-)
+CALCULATE( DISTINCTCOUNT( Sales[ProductKey] ), ALLEXCEPT( DimProduct, DimProduct[ProductKey] ) )
 
 Product in Returns Count :=
-CALCULATE(
-    DISTINCTCOUNT( FactReturns[ProductKey] ),
-    ALLEXCEPT( DimProduct, DimProduct[ProductKey] )
-)
+CALCULATE( DISTINCTCOUNT( FactReturns[ProductKey] ), ALLEXCEPT( DimProduct, DimProduct[ProductKey] ) )
 
--- Orphan check: products in fact with no dimension match
--- Run in DAX Studio to return a table
+-- Orphan check: fact keys with no dimension match (run in DAX Studio)
 EVALUATE
 FILTER(
-    ADDCOLUMNS(
-        VALUES( FactSales[ProductKey] ),
-        "InDimProduct", CALCULATE( COUNTROWS( DimProduct ), DimProduct[ProductKey] = EARLIER( FactSales[ProductKey] ) )
-    ),
+    ADDCOLUMNS( VALUES( Sales[ProductKey] ),
+        "InDimProduct",
+        CALCULATE( COUNTROWS( DimProduct ), DimProduct[ProductKey] = EARLIER( Sales[ProductKey] ) ) ),
     [InDimProduct] = 0
 )
 ```

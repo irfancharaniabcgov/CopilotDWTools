@@ -28,11 +28,41 @@ Supplemented with SQL Server 2016–2022 on-premises physical design guidance.
 | **Bus Matrix** | An enterprise-level matrix showing which dimensions attach to which fact tables. |
 | **Slowly Changing Dimension (SCD)** | A technique for tracking historical changes to dimension attributes. |
 | **ODS** | Operational Data Store — a subject-oriented, integrated, volatile, current-valued store used as a staging hub before the DW. |
-| **Audit Column** | System metadata columns (RowCreatedDate, RowUpdatedDate, ETLBatchID, etc.) added to every DW table for lineage and troubleshooting. |
+| **Audit Column** | System metadata columns for lineage and troubleshooting. This org uses `Internal.Lineage` + `LineageKey` (load-level lineage) — not row-level `ETLBatchID`/`RowCreatedDate` columns on every table. |
 | **Late-Arriving Fact** | A fact row whose effective date falls in a past period; requires retroactive SCD Type 2 key resolution. |
 | **Late-Arriving Dimension** | A dimension member that does not exist at fact load time; requires an "unknown" surrogate key placeholder. |
 
 ---
+
+## Org Naming Conventions
+
+Use the organisation's actual DW naming conventions when generating SQL or SSDT artifacts.
+
+### Schema Reference
+
+| Schema | Purpose | Replace/remove generic alternatives |
+|---|---|---|
+| `Dimension` | Dimension tables and their load procedures | `dbo`, `dim`, `dw`, `dimension` |
+| `Fact` | Fact tables and their load procedures | `dbo`, `fact`, `dw` |
+| `Staging` | Pre-processed staging tables, views, and load procedures | `stg`, `stage`, `staging` |
+| `Internal` | Control, audit, helper tables, and utility procedures | `etl`, `meta`, `control`, `arch`, `audit`, `ods` |
+| `SSAS` | Views used only as SSAS data sources | keep `SSAS` |
+| `Security` | Roles and permissions | keep `Security` |
+| `Snapshots` | Debug snapshot tables | keep `Snapshots` |
+
+### Object and Key Rules
+
+| Area | Org convention | Example |
+|---|---|---|
+| Dimension table names | Schema is the classifier; no `Dim` prefix | `[Dimension].[Calendar]`, `[Dimension].[Customer]` |
+| Fact table names | Schema is the classifier; no `Fact` prefix | `[Fact].[SalesOrder]` |
+| Staging table names | Same entity name across schemas; no `stg_` prefix | `[Staging].[Customer]` → `[Dimension].[Customer]` |
+| Surrogate keys | `{EntityName}Key` | `CustomerKey`, `DateKey`, `LineageKey` |
+| Source/natural keys | `_Source{OriginalName}` | `_SourceCustomerID`, `_SourcePartyID` |
+| Date FKs in facts | `{Role}DateKey` | `OrderDateKey`, `ShipDateKey`, `ServiceStartDateKey` |
+| Staging pattern | Staging tables have their own identity key plus `_Source...` columns | `[Staging].[Customer]` with `CustomerKey IDENTITY` and `_SourceCustomerID` |
+| Load procedure naming | Schema-qualified `Load{EntityName}` with no `sp_`/`usp_` prefix | `Staging.LoadCustomer`, `Dimension.LoadCustomer`, `Fact.LoadSalesOrder` |
+| Lineage/audit | Use `Internal.Lineage` and `LineageKey`; do not standardize on row-level `ETLBatchID`/`SourceSystemID` columns | `Internal.GetLineageKey`, `LineageKey INT NULL` |
 
 ## Fact Table Types
 
@@ -48,7 +78,7 @@ Supplemented with SQL Server 2016–2022 on-premises physical design guidance.
 
 ### Accumulating Snapshot Fact Table
 - One row per long-lived process instance (order lifecycle, claim lifecycle).
-- Multiple date FKs (OrderDate, ShipDate, DeliveryDate, etc.) — each a FK to `DimDate`.
+- Multiple date FKs (OrderDate, ShipDate, DeliveryDate, etc.) — each a FK to `[Dimension].[Calendar]`.
 - Rows are **updated** as milestones are reached (unique among fact tables).
 - Lag measures (days between milestones) are calculated columns or DAX measures.
 
@@ -71,7 +101,7 @@ Full history tracking. New row per change. Surrogate key FK in fact table.
 
 ```sql
 -- Minimal Date Dimension scaffold
-CREATE TABLE dbo.DimDate (
+CREATE TABLE [Dimension].[Calendar] (
     DateKey        INT           NOT NULL PRIMARY KEY,  -- YYYYMMDD
     FullDate       DATE          NOT NULL,
     DayOfWeek      TINYINT       NOT NULL,
@@ -87,11 +117,31 @@ CREATE TABLE dbo.DimDate (
     IsWeekend      BIT           NOT NULL DEFAULT 0,
     IsHoliday      BIT           NOT NULL DEFAULT 0,
     HolidayName    VARCHAR(50)   NULL,
-    -- Audit
-    RowCreatedDate DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-    ETLBatchID     INT           NOT NULL DEFAULT -1
+    LineageKey     INT           NULL
 );
 ```
+
+#### Extended Business Calendar Attributes
+
+The minimal scaffold above covers common attributes. Before generating a date dimension, **ask the user which of the following apply** — these are business and region-specific:
+
+| Column | Type | Notes |
+|---|---|---|
+| `IsWorkingDay` | BIT | Derived: `IsWeekend = 0 AND IsHoliday = 0`. Drives working-day KPIs. |
+| `HolidayName` | VARCHAR(50) NULL | Already in scaffold. Populated only where `IsHoliday = 1`. |
+| `IsLastWorkingDayOfMonth` | BIT | Useful for month-end financial reports. |
+| `IsLastDayOfMonth` | BIT | Calendar month-end flag. |
+| `WeekdayName` | VARCHAR(10) | Already covered by `DayName`. Keep consistent naming. |
+| `RelativeDayOffset` | INT | Days from today (negative = past). Useful for rolling windows. |
+| `FiscalPeriodKey` | INT | `YYYYPP` format if org uses 13-period fiscal calendar. |
+| `FiscalWeek` | TINYINT | If weekly fiscal reporting is required. |
+
+**Holiday calendar is region-specific** — clarify with the user which applies:
+- **BC Provincial**: Family Day, BC Day, Remembrance Day, plus federal statutory holidays
+- **Federal Canadian**: Standard 10 federal holidays
+- **Custom org calendar**: Office closures, project blackout periods, shift schedules
+
+> **Inspect first**: Query the existing `[Dimension].[Calendar]` or equivalent before adding columns. `IsWeekend`, `IsHoliday`, and `HolidayName` are in the standard scaffold and may already exist.
 
 ### Time-of-Day Dimension
 Separate from Date. Integer TimeKey in `HHMM` or seconds-since-midnight.
@@ -99,15 +149,15 @@ Only include if grain requires intra-day analysis (call center, trading).
 
 ### Role-Playing Dimension
 A single physical dimension table aliased multiple times in a fact table.
-Example: `DimDate` plays `OrderDateKey`, `ShipDateKey`, `DueDateKey`.
+Example: `[Dimension].[Calendar]` plays `OrderDateKey`, `ShipDateKey`, `DueDateKey`.
 In SSAS Tabular: create inactive relationships; activate with `USERELATIONSHIP()`.
 
 ```sql
 -- Fact table with role-playing date keys
-ALTER TABLE dbo.FactSalesOrder ADD
-    OrderDateKey   INT NOT NULL REFERENCES dbo.DimDate(DateKey),
-    ShipDateKey    INT     NULL REFERENCES dbo.DimDate(DateKey),
-    DueDateKey     INT     NULL REFERENCES dbo.DimDate(DateKey);
+ALTER TABLE [Fact].[SalesOrder] ADD
+    OrderDateKey   INT NOT NULL REFERENCES [Dimension].[Calendar](DateKey),
+    ShipDateKey    INT     NULL REFERENCES [Dimension].[Calendar](DateKey),
+    DueDateKey     INT     NULL REFERENCES [Dimension].[Calendar](DateKey);
 ```
 
 ### Junk Dimension
@@ -153,41 +203,36 @@ Requires: `RowEffectiveDate`, `RowExpirationDate`, `IsCurrent` flag.
 #### Standard SCD Type 2 Column Set
 ```sql
 -- Required columns on every SCD Type 2 dimension
-EmployeeSK        INT           NOT NULL IDENTITY(1,1) PRIMARY KEY,
-EmployeeNK        INT           NOT NULL,   -- natural/business key from source
+EmployeeKey       INT           NOT NULL IDENTITY(1,1) PRIMARY KEY,
+_SourceEmployeeID INT           NOT NULL,   -- natural/business key from source
 -- ... business attribute columns ...
 RowEffectiveDate  DATE          NOT NULL,
 RowExpirationDate DATE          NOT NULL DEFAULT '9999-12-31',
 IsCurrent         BIT           NOT NULL DEFAULT 1,
--- Audit columns (see Audit Columns Standard section)
-RowCreatedDate    DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-RowUpdatedDate    DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-ETLBatchID        INT           NOT NULL DEFAULT -1,
-SourceSystemID    TINYINT       NOT NULL DEFAULT 1
+LineageKey        INT           NULL
 ```
 
 #### SQL Server MERGE Implementation for SCD Type 2
 
 ```sql
 -- ============================================================
--- SCD Type 2 MERGE pattern for DimEmployee
--- Assumes staging table: stg.Employee
+-- SCD Type 2 MERGE pattern for [Dimension].[Employee]
+-- Assumes staging table: [Staging].[Employee]
 -- ============================================================
 BEGIN TRANSACTION;
 
 -- Step 1: Expire rows where tracked attributes have changed
-UPDATE dw.DimEmployee
+UPDATE [Dimension].[Employee]
 SET    RowExpirationDate = CAST(GETDATE() AS DATE),
        IsCurrent         = 0,
-       RowUpdatedDate    = SYSUTCDATETIME(),
-       ETLBatchID        = @BatchID
+       LineageKey        = @LineageKey
 WHERE  IsCurrent = 1
-  AND  EmployeeNK IN (
-        SELECT s.EmployeeID
-        FROM   stg.Employee s
-        JOIN   dw.DimEmployee d
-               ON  d.EmployeeNK = s.EmployeeID
-               AND d.IsCurrent  = 1
+  AND  _SourceEmployeeID IN (
+        SELECT s._SourceEmployeeID
+        FROM   [Staging].[Employee] s
+        JOIN   [Dimension].[Employee] d
+               ON  d._SourceEmployeeID = s._SourceEmployeeID
+               AND d.IsCurrent         = 1
         WHERE  -- List every tracked (Type 2) attribute here
                d.LastName       <> s.LastName
             OR d.DepartmentName <> s.DepartmentName
@@ -195,13 +240,12 @@ WHERE  IsCurrent = 1
        );
 
 -- Step 2: Insert new current rows for changed + brand-new members
-INSERT INTO dw.DimEmployee (
-    EmployeeNK, FirstName, LastName, DepartmentName, JobTitle,
-    RowEffectiveDate, RowExpirationDate, IsCurrent,
-    RowCreatedDate, RowUpdatedDate, ETLBatchID, SourceSystemID
+INSERT INTO [Dimension].[Employee] (
+    _SourceEmployeeID, FirstName, LastName, DepartmentName, JobTitle,
+    RowEffectiveDate, RowExpirationDate, IsCurrent, LineageKey
 )
 SELECT
-    s.EmployeeID,
+    s._SourceEmployeeID,
     s.FirstName,
     s.LastName,
     s.DepartmentName,
@@ -209,25 +253,21 @@ SELECT
     CAST(GETDATE() AS DATE)  AS RowEffectiveDate,
     '9999-12-31'             AS RowExpirationDate,
     1                        AS IsCurrent,
-    SYSUTCDATETIME()         AS RowCreatedDate,
-    SYSUTCDATETIME()         AS RowUpdatedDate,
-    @BatchID                 AS ETLBatchID,
-    1                        AS SourceSystemID
-FROM stg.Employee s
+    @LineageKey              AS LineageKey
+FROM [Staging].[Employee] s
 WHERE NOT EXISTS (
     SELECT 1
-    FROM   dw.DimEmployee d
-    WHERE  d.EmployeeNK = s.EmployeeID
-      AND  d.IsCurrent  = 1
+    FROM   [Dimension].[Employee] d
+    WHERE  d._SourceEmployeeID = s._SourceEmployeeID
+      AND  d.IsCurrent         = 1
 );
 
 -- Step 3: Type 1 overwrites (non-tracked attributes like email)
 UPDATE d
-SET    d.EmailAddress  = s.EmailAddress,
-       d.RowUpdatedDate = SYSUTCDATETIME(),
-       d.ETLBatchID    = @BatchID
-FROM   dw.DimEmployee d
-JOIN   stg.Employee   s ON d.EmployeeNK = s.EmployeeID
+SET    d.EmailAddress = s.EmailAddress,
+       d.LineageKey   = @LineageKey
+FROM   [Dimension].[Employee] d
+JOIN   [Staging].[Employee]   s ON d._SourceEmployeeID = s._SourceEmployeeID
 WHERE  d.IsCurrent = 1
   AND  d.EmailAddress <> s.EmailAddress;
 
@@ -280,7 +320,7 @@ The Bus Matrix is the master blueprint of the DW. Rows = fact tables (business p
 | Storing measures in dimension | Mixes grain; causes query complexity | Move to appropriate fact table |
 | Fact table without declared grain | Ambiguous rows; incorrect aggregations | Declare grain before design |
 | Nulls in FK columns | Causes SSAS relationship errors; DAX blank propagation | Use -1 "Unknown" surrogate key |
-| Date stored as VARCHAR | Prevents date math; prevents DimDate join | Use INT (YYYYMMDD) or DATE type |
+| Date stored as VARCHAR | Prevents date math; prevents `Dimension.Calendar` join | Use INT (YYYYMMDD) or DATE type |
 | One big fact table (God Fact) | Violates single grain principle | Split by business process and grain |
 | Over-using Type 2 SCD | Table bloat; slow lookups; SSAS processing cost | Only track attributes business needs historically |
 
@@ -324,6 +364,8 @@ An **ODS** is a subject-oriented, integrated, volatile, current-valued data stor
 | **DW (Kimball)** | Append-only (facts), SCD (dims) | Declared business grain | Full history | Analysts, BI tools |
 
 ### ODS Implementation Pattern (SQL Server)
+
+> **Note:** This organisation does not use an ODS layer — data flows directly from `Staging` → `Dimension`/`Fact`. The ODS pattern is included for reference only.
 
 ```sql
 -- ODS tables follow source structure but with integration keys
@@ -378,22 +420,24 @@ Source Systems
      │
      ▼
 ┌──────────────┐   Truncate/reload each run
-│   Staging    │   Raw source format, no transformation
+│   Staging    │   Staging schema
 └──────────────┘
      │
      ▼
-┌──────────────┐   MERGE upsert, current state only
-│     ODS      │   Integrated, cleansed, conformed NKs
+┌──────────────┐   Reference pattern only
+│ *(not used)* │   ODS layer is not used in this organisation
 └──────────────┘
      │
      ▼
-┌──────────────┐   SCD Type 2, surrogate keys, star schema
-│  Data Warehouse│  Full history, Kimball dimensional model
+┌──────────────┐   SCD / key resolution / star schema
+│ Dimension /  │   Dimension / Fact schemas
+│ Fact schemas │
 └──────────────┘
      │
      ▼
 ┌──────────────┐
-│  SSAS Tabular│   Semantic layer, DAX, PBIRS reports
+│ SSAS views + │   SSAS views + Tabular
+│   Tabular    │
 └──────────────┘
 ```
 
@@ -449,14 +493,14 @@ Columnstore indexes (introduced SQL Server 2012, mature from 2016+) are the **pr
 ```sql
 -- Clustered Columnstore Index on a fact table (recommended for all large fact tables)
 -- Drop any existing clustered index first, then:
-CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSalesOrder
-ON dbo.FactSalesOrder
+CREATE CLUSTERED COLUMNSTORE INDEX CCI_SalesOrder
+ON [Fact].[SalesOrder]
 WITH (DATA_COMPRESSION = COLUMNSTORE_ARCHIVE,  -- for cold/historical partitions
       MAXDOP = 4);                             -- limit parallelism during rebuild
 
 -- For the active/hot partition, use COLUMNSTORE (no ARCHIVE) for faster query:
-CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSalesOrder
-ON dbo.FactSalesOrder
+CREATE CLUSTERED COLUMNSTORE INDEX CCI_SalesOrder
+ON [Fact].[SalesOrder]
 WITH (DATA_COMPRESSION = COLUMNSTORE, MAXDOP = 4);
 ```
 
@@ -499,33 +543,31 @@ AS PARTITION PF_Monthly
 ALL TO ([PRIMARY]);          -- route all to PRIMARY; adjust for filegroup strategy
 
 -- Step 3: Create fact table on partition scheme
-CREATE TABLE dbo.FactSalesOrder (
-    SalesOrderSK   BIGINT        NOT NULL,
-    OrderDateKey   INT           NOT NULL,
-    CustomerSK     INT           NOT NULL,
-    ProductSK      INT           NOT NULL,
-    SalesAmount    DECIMAL(18,4) NOT NULL,
-    Quantity       INT           NOT NULL,
-    -- Audit
-    RowCreatedDate DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-    ETLBatchID     INT           NOT NULL DEFAULT -1
+CREATE TABLE [Fact].[SalesOrder] (
+    SalesOrderKey BIGINT        NOT NULL,
+    OrderDateKey  INT           NOT NULL,
+    CustomerKey   INT           NOT NULL,
+    ProductKey    INT           NOT NULL,
+    SalesAmount   DECIMAL(18,4) NOT NULL,
+    Quantity      INT           NOT NULL,
+    LineageKey    INT           NULL
 ) ON PS_Monthly (OrderDateKey);
 
 -- Step 4: Create CCI aligned to partition scheme
-CREATE CLUSTERED COLUMNSTORE INDEX CCI_FactSalesOrder
-ON dbo.FactSalesOrder
+CREATE CLUSTERED COLUMNSTORE INDEX CCI_SalesOrder
+ON [Fact].[SalesOrder]
 ON PS_Monthly (OrderDateKey);
 ```
 
 **Partition switching for ETL (zero-downtime load):**
 ```sql
 -- Load new month data into a staging table, then switch in
-CREATE TABLE stg.FactSalesOrder_202401 (... same schema as dbo.FactSalesOrder ...)
+CREATE TABLE [Staging].[FactSalesOrder_202401] (... same schema as [Fact].[SalesOrder] ...)
 ON [PRIMARY];
 
 -- Populate staging, then atomic switch
-ALTER TABLE stg.FactSalesOrder_202401
-    SWITCH TO dbo.FactSalesOrder PARTITION
+ALTER TABLE [Staging].[FactSalesOrder_202401]
+    SWITCH TO [Fact].[SalesOrder] PARTITION
     $PARTITION.PF_Monthly(20240101);
 ```
 
@@ -566,11 +608,11 @@ USE [DW_Production];
 EXEC sp_updatestats;          -- quick sampled update of stale statistics
 
 -- Full scan update for fact tables where skew is suspected
-UPDATE STATISTICS dbo.FactSalesOrder WITH FULLSCAN;
+UPDATE STATISTICS [Fact].[SalesOrder] WITH FULLSCAN;
 
 -- Create additional statistics on frequently filtered non-key columns
-CREATE STATISTICS STAT_FactSalesOrder_Channel
-ON dbo.FactSalesOrder (SalesChannelCode);
+CREATE STATISTICS STAT_SalesOrder_Channel
+ON [Fact].[SalesOrder] (SalesChannelCode);
 
 -- Auto-update statistics async (set at database level)
 ALTER DATABASE [DW_Production] SET AUTO_UPDATE_STATISTICS ON;
@@ -585,19 +627,19 @@ ALTER DATABASE [DW_Production] SET AUTO_UPDATE_STATISTICS_ASYNC ON;
 
 ```sql
 -- Standard IDENTITY surrogate key
-CREATE TABLE dbo.DimCustomer (
-    CustomerSK  INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    CustomerNK  INT NOT NULL,
+CREATE TABLE [Dimension].[Customer] (
+    CustomerKey       INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    _SourceCustomerID INT NOT NULL,
     ...
 );
 -- Note: Reserve negative values for special members
 -- -1 = Unknown, -2 = Not Applicable, -3 = Error/Pending
 -- Seed IDENTITY at 1; insert special members with SET IDENTITY_INSERT ON
-SET IDENTITY_INSERT dbo.DimCustomer ON;
-INSERT dbo.DimCustomer (CustomerSK, CustomerNK, CustomerName, ...)
+SET IDENTITY_INSERT [Dimension].[Customer] ON;
+INSERT [Dimension].[Customer] (CustomerKey, _SourceCustomerID, CustomerName, ...)
 VALUES (-1, -1, 'Unknown', ...),
        (-2, -2, 'Not Applicable', ...);
-SET IDENTITY_INSERT dbo.DimCustomer OFF;
+SET IDENTITY_INSERT [Dimension].[Customer] OFF;
 ```
 
 ### 2. SEQUENCE Object (SQL Server 2012+)
@@ -606,7 +648,7 @@ Use SEQUENCE when surrogate keys must be coordinated across tables or generated 
 
 ```sql
 -- Create a shared sequence for a dimension family
-CREATE SEQUENCE dbo.SEQ_DimCustomer
+CREATE SEQUENCE [Internal].[SEQ_CustomerKey]
     AS INT
     START WITH 1
     INCREMENT BY 1
@@ -616,11 +658,11 @@ CREATE SEQUENCE dbo.SEQ_DimCustomer
     CACHE 1000;          -- cache 1000 values for performance
 
 -- Use in ETL
-DECLARE @NewSK INT = NEXT VALUE FOR dbo.SEQ_DimCustomer;
+DECLARE @NewKey INT = NEXT VALUE FOR [Internal].[SEQ_CustomerKey];
 
 -- Use DEFAULT in table definition
-CREATE TABLE dbo.DimCustomer (
-    CustomerSK INT NOT NULL DEFAULT (NEXT VALUE FOR dbo.SEQ_DimCustomer) PRIMARY KEY,
+CREATE TABLE [Dimension].[Customer] (
+    CustomerKey INT NOT NULL DEFAULT (NEXT VALUE FOR [Internal].[SEQ_CustomerKey]) PRIMARY KEY,
     ...
 );
 ```
@@ -632,28 +674,25 @@ When loading fact tables, resolve natural keys to surrogate keys via lookup. Alw
 ```sql
 -- Surrogate key lookup with Unknown member fallback
 -- Used in ETL staging → fact load
-INSERT INTO dbo.FactSalesOrder (
-    OrderDateKey, CustomerSK, ProductSK, SalesAmount, Quantity,
-    RowCreatedDate, ETLBatchID
+INSERT INTO [Fact].[SalesOrder] (
+    OrderDateKey, CustomerKey, ProductKey, SalesAmount, Quantity, LineageKey
 )
 SELECT
-    ISNULL(dd.DateKey,  -1)  AS OrderDateKey,
-    ISNULL(dc.CustomerSK, -1) AS CustomerSK,
-    ISNULL(dp.ProductSK,  -1) AS ProductSK,
+    ISNULL(cal.DateKey, -1)      AS OrderDateKey,
+    ISNULL(dc.CustomerKey, -1)   AS CustomerKey,
+    ISNULL(dp.ProductKey, -1)    AS ProductKey,
     s.SalesAmount,
     s.Quantity,
-    SYSUTCDATETIME(),
-    @BatchID
-FROM stg.SalesOrder s
-LEFT JOIN dbo.DimDate d
-    ON  d.FullDate = CAST(s.OrderDate AS DATE)
-LEFT JOIN dbo.DimDate dd ON dd.DateKey = d.DateKey
-LEFT JOIN dbo.DimCustomer dc
-    ON  dc.CustomerNK = s.CustomerID
-    AND dc.IsCurrent  = 1
-LEFT JOIN dbo.DimProduct dp
-    ON  dp.ProductNK  = s.ProductCode
-    AND dp.IsCurrent  = 1;
+    @LineageKey                  AS LineageKey
+FROM [Staging].[SalesOrder] s
+LEFT JOIN [Dimension].[Calendar] cal
+    ON cal.FullDate = CAST(s.OrderDate AS DATE)
+LEFT JOIN [Dimension].[Customer] dc
+    ON  dc._SourceCustomerID = s._SourceCustomerID
+    AND dc.IsCurrent         = 1
+LEFT JOIN [Dimension].[Product] dp
+    ON  dp._SourceProductCode = s._SourceProductCode
+    AND dp.IsCurrent          = 1;
 ```
 
 ---
@@ -672,14 +711,14 @@ A fact row arrives referencing a natural key (e.g., CustomerID = 9999) that does
 ```sql
 -- Backfill previously unresolved fact rows
 UPDATE f
-SET    f.CustomerSK = dc.CustomerSK,
-       f.ETLBatchID = @BatchID
-FROM   dbo.FactSalesOrder f
-JOIN   stg.SalesOrder_Unresolved u ON u.SalesOrderNK = f.SalesOrderNK
-JOIN   dbo.DimCustomer dc
-       ON  dc.CustomerNK = u.CustomerID
-       AND dc.IsCurrent  = 1
-WHERE  f.CustomerSK = -1;
+SET    f.CustomerKey = dc.CustomerKey,
+       f.LineageKey  = @LineageKey
+FROM   [Fact].[SalesOrder] f
+JOIN   [Staging].[SalesOrder_Unresolved] u ON u._SourceSalesOrderID = f._SourceSalesOrderID
+JOIN   [Dimension].[Customer] dc
+       ON  dc._SourceCustomerID = u._SourceCustomerID
+       AND dc.IsCurrent         = 1
+WHERE  f.CustomerKey = -1;
 ```
 
 ### Impact on SSAS Tabular — Default/Unknown Member
@@ -699,67 +738,65 @@ A fact row arrives with a transaction date that falls in a **past period** durin
 ### Solution: Point-in-Time SCD Type 2 Resolution
 
 ```sql
--- Resolve dimension SK as of the fact's transaction date
+-- Resolve dimension key as of the fact's transaction date
 -- Not IsCurrent = 1, but the row that was current AT the transaction date
-INSERT INTO dbo.FactSalesOrder (
-    OrderDateKey, CustomerSK, ProductSK, SalesAmount, Quantity,
-    RowCreatedDate, ETLBatchID
+INSERT INTO [Fact].[SalesOrder] (
+    OrderDateKey, CustomerKey, ProductKey, SalesAmount, Quantity, LineageKey
 )
 SELECT
-    ISNULL(dd.DateKey, -1),
-    ISNULL(dc.CustomerSK, -1),
-    ISNULL(dp.ProductSK, -1),
+    ISNULL(cal.DateKey, -1),
+    ISNULL(dc.CustomerKey, -1),
+    ISNULL(dp.ProductKey, -1),
     s.SalesAmount,
     s.Quantity,
-    SYSUTCDATETIME(),
-    @BatchID
-FROM stg.LateArrivingSalesOrder s
--- Resolve CustomerSK as of OrderDate (point-in-time lookup)
-LEFT JOIN dbo.DimCustomer dc
-    ON  dc.CustomerNK       = s.CustomerID
+    @LineageKey
+FROM [Staging].[LateArrivingSalesOrder] s
+-- Resolve CustomerKey as of OrderDate (point-in-time lookup)
+LEFT JOIN [Dimension].[Customer] dc
+    ON  dc._SourceCustomerID    = s._SourceCustomerID
     AND CAST(s.OrderDate AS DATE) >= dc.RowEffectiveDate
     AND CAST(s.OrderDate AS DATE) <  COALESCE(dc.RowExpirationDate, '9999-12-31')
-LEFT JOIN dbo.DimProduct dp
-    ON  dp.ProductNK        = s.ProductCode
+LEFT JOIN [Dimension].[Product] dp
+    ON  dp._SourceProductCode   = s._SourceProductCode
     AND CAST(s.OrderDate AS DATE) >= dp.RowEffectiveDate
     AND CAST(s.OrderDate AS DATE) <  COALESCE(dp.RowExpirationDate, '9999-12-31')
-LEFT JOIN dbo.DimDate dd
-    ON  dd.FullDate = CAST(s.OrderDate AS DATE);
+LEFT JOIN [Dimension].[Calendar] cal
+    ON  cal.FullDate = CAST(s.OrderDate AS DATE);
 ```
 
-**Gotcha:** If no SCD Type 2 row covers the transaction date (data quality gap), fall back to the earliest available row for that NK:
+**Gotcha:** If no SCD Type 2 row covers the transaction date (data quality gap), fall back to the earliest available row for that source key:
 
 ```sql
 -- Fallback: use earliest SCD row if point-in-time lookup returns NULL
-LEFT JOIN dbo.DimCustomer dc_fallback
-    ON  dc_fallback.CustomerNK = s.CustomerID
+LEFT JOIN [Dimension].[Customer] dc_fallback
+    ON  dc_fallback._SourceCustomerID = s._SourceCustomerID
     AND dc_fallback.RowEffectiveDate = (
             SELECT MIN(RowEffectiveDate)
-            FROM   dbo.DimCustomer
-            WHERE  CustomerNK = s.CustomerID
+            FROM   [Dimension].[Customer]
+            WHERE  _SourceCustomerID = s._SourceCustomerID
         )
 ```
 
 ---
 
-## Audit Columns Standard
+## Audit / Lineage Standard
 
-**Every table in the Data Warehouse** (staging, ODS, dimension, fact, bridge) must carry the following audit columns. This is non-negotiable for lineage, troubleshooting, and reload scenarios.
+This organisation uses **load-level lineage** rather than standardizing `RowCreatedDate`, `ETLBatchID`, or `SourceSystemID` on every table row.
 
-| Column | Data Type | Default | Applied To | Purpose |
-|---|---|---|---|---|
-| `RowCreatedDate` | `DATETIME2(0)` | `SYSUTCDATETIME()` | All tables | When was this row first inserted |
-| `RowUpdatedDate` | `DATETIME2(0)` | `SYSUTCDATETIME()` | Dim, ODS | When was this row last modified |
-| `ETLBatchID` | `INT` | `-1` | All tables | Foreign key to ETL batch log table |
-| `SourceSystemID` | `TINYINT` | `1` | All tables | Identifies the source system of the data |
-| `RowHash` | `BINARY(32)` | Computed | Dim, ODS | SHA2_256 hash of tracked attributes for change detection |
+| Object / Column | Purpose | Notes |
+|---|---|---|
+| `Internal.Lineage` | Tracks load start/finish, status, type, and row count per table | Use `LineageKey`, `TableName`, `StartLoad`, `FinishLoad`, `Status`, `Type`, `RowCount` |
+| `Internal.IncrementalLoads` | Tracks incremental load dates | Maintained after successful loads |
+| `Internal.LastUpdatedSource` | Tracks source-system last updated timestamps | Used for incremental orchestration |
+| `Internal.ProcedureError` | Logs stored procedure failures | Pair with `Internal.RethrowError` |
+| `LineageKey` | Captures the load execution on staging and related objects | Prefer `LineageKey INT NULL` over batch-ID columns |
 
 ### RowHash Change Detection Pattern
 
 ```sql
 -- Compute hash of tracked attributes during staging load
--- Avoids column-by-column comparison in MERGE
-ALTER TABLE stg.Employee ADD
+-- Avoids column-by-column comparison in SCD processing
+ALTER TABLE [Staging].[Employee] ADD
     RowHash AS CAST(
         HASHBYTES('SHA2_256',
             CONCAT_WS('|',
@@ -771,26 +808,21 @@ ALTER TABLE stg.Employee ADD
         ) AS BINARY(32)
     ) PERSISTED;
 
--- In the SCD MERGE, compare single hash column instead of N columns
-WHEN MATCHED AND tgt.RowHash <> src.RowHash THEN
-    UPDATE SET ...
+-- In the SCD load, compare a single hash column instead of N columns
+WHERE tgt.RowHash <> src.RowHash
 ```
 
-### ETL Batch Log Table
+### Internal Lineage Table
 
 ```sql
-CREATE TABLE dbo.ETLBatchLog (
-    BatchID         INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
-    BatchName       VARCHAR(200)  NOT NULL,
-    StartTime       DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-    EndTime         DATETIME2(0)  NULL,
-    Status          VARCHAR(20)   NOT NULL DEFAULT 'Running',  -- Running | Succeeded | Failed
-    RowsInserted    BIGINT        NOT NULL DEFAULT 0,
-    RowsUpdated     BIGINT        NOT NULL DEFAULT 0,
-    RowsDeleted     BIGINT        NOT NULL DEFAULT 0,
-    ErrorMessage    NVARCHAR(MAX) NULL,
-    ServerName      NVARCHAR(128) NOT NULL DEFAULT @@SERVERNAME,
-    ExecutedBy      NVARCHAR(128) NOT NULL DEFAULT SYSTEM_USER
+CREATE TABLE [Internal].[Lineage] (
+    [LineageKey] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [TableName]  NVARCHAR(200) NOT NULL,
+    [StartLoad]  DATETIME2(7)  NOT NULL,
+    [FinishLoad] DATETIME2(7)  NULL,
+    [Status]     NVARCHAR(1)   NOT NULL DEFAULT N'P',
+    [Type]       NVARCHAR(1)   NOT NULL DEFAULT N'F',
+    [RowCount]   BIGINT        NOT NULL DEFAULT 0
 );
 ```
 
@@ -815,16 +847,15 @@ CREATE TABLE dbo.ETLBatchLog (
 ```sql
 -- Every dimension must have these reserved rows
 -- Insert with IDENTITY_INSERT ON (see Surrogate Key section)
-SET IDENTITY_INSERT dbo.DimCustomer ON;
-INSERT INTO dbo.DimCustomer (
-    CustomerSK, CustomerNK, CustomerName, City, StateCode,
-    RowEffectiveDate, RowExpirationDate, IsCurrent,
-    RowCreatedDate, RowUpdatedDate, ETLBatchID, SourceSystemID
+SET IDENTITY_INSERT [Dimension].[Customer] ON;
+INSERT INTO [Dimension].[Customer] (
+    CustomerKey, _SourceCustomerID, CustomerName, City, StateCode,
+    RowEffectiveDate, RowExpirationDate, IsCurrent, LineageKey
 ) VALUES
-    (-1, -1, 'Unknown',        'Unknown',  'XX', '1900-01-01', '9999-12-31', 1, SYSUTCDATETIME(), SYSUTCDATETIME(), -1, 0),
-    (-2, -2, 'Not Applicable', 'N/A',      'XX', '1900-01-01', '9999-12-31', 1, SYSUTCDATETIME(), SYSUTCDATETIME(), -1, 0),
-    (-3, -3, 'Pending',        'Pending',  'XX', '1900-01-01', '9999-12-31', 1, SYSUTCDATETIME(), SYSUTCDATETIME(), -1, 0);
-SET IDENTITY_INSERT dbo.DimCustomer OFF;
+    (-1, -1, 'Unknown',        'Unknown',  'XX', '1900-01-01', '9999-12-31', 1, NULL),
+    (-2, -2, 'Not Applicable', 'N/A',      'XX', '1900-01-01', '9999-12-31', 1, NULL),
+    (-3, -3, 'Pending',        'Pending',  'XX', '1900-01-01', '9999-12-31', 1, NULL);
+SET IDENTITY_INSERT [Dimension].[Customer] OFF;
 ```
 
 ### NULL Handling in Measures (Fact Columns)
@@ -848,48 +879,46 @@ EndingBalance  DECIMAL(18,4)     NULL,              -- semi-additive: NULL = no 
 
 | Layer | Schema | Responsibility |
 |---|---|---|
-| Staging | `stg` | Raw extract from sources; truncate/reload each run; no transformations |
-| ODS | `ods` | Integrated, current-state upsert; cleansed; surrogate-key–free |
-| Dimensions | `dw` | SCD processing; surrogate key assignment |
-| Facts | `dw` | Surrogate key lookup; audit column population |
-| Archive | `arch` | Rejected/unresolved rows for investigation |
+| Staging | `Staging` | Pre-processed staging tables, views, and load procedures |
+| ODS | `*(not used)*` | This organisation loads directly from `Staging` to `Dimension` / `Fact` |
+| Dimensions | `Dimension` | SCD processing and surrogate key assignment |
+| Facts | `Fact` | Surrogate key lookup and fact loading |
+| Internal | `Internal` | Lineage, incremental load tracking, errors, rejects, and helper procedures |
 
 ### Staging Pattern (SQL Server)
 
 ```sql
--- Staging tables: raw schema matching source, audit appended
-CREATE TABLE stg.Customer (
-    CustomerID      INT           NOT NULL,
-    CustomerName    VARCHAR(200)  NOT NULL,
-    Email           VARCHAR(150)  NULL,
-    -- Staging audit
-    StgLoadDate     DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-    StgBatchID      INT           NOT NULL DEFAULT -1,
-    StgSourceFile   VARCHAR(500)  NULL,
-    StgRowNumber    BIGINT        NULL
+-- Staging tables: org pattern uses schema-qualified entity names
+CREATE TABLE [Staging].[Customer] (
+    CustomerKey       INT           IDENTITY (1, 1) NOT NULL,
+    CustomerName      VARCHAR(200)  NOT NULL,
+    Email             VARCHAR(150)  NULL,
+    _SourceCustomerID INT           NOT NULL,
+    LineageKey        INT           NULL,
+    CONSTRAINT [PK_Customer] PRIMARY KEY CLUSTERED (CustomerKey ASC)
 );
 
--- Truncate before each load (staging is transient)
-TRUNCATE TABLE stg.Customer;
+-- Truncate before each load when the staging pattern is transient
+TRUNCATE TABLE [Staging].[Customer];
 ```
 
 ### Reject / Error Row Handling
 
 ```sql
--- Archive rejected rows for investigation
-CREATE TABLE arch.FactSalesOrder_Rejects (
-    -- All columns of stg.SalesOrder
+-- Capture rejected rows for investigation in the Internal schema
+CREATE TABLE [Internal].[FactSalesOrder_Rejects] (
+    -- All columns of [Staging].[SalesOrder]
     RejectReason    VARCHAR(500)  NOT NULL,
     RejectDate      DATETIME2(0)  NOT NULL DEFAULT SYSUTCDATETIME(),
-    BatchID         INT           NOT NULL
+    LineageKey      INT           NOT NULL
 );
 
 -- During fact load: capture rows that could not be resolved
-INSERT INTO arch.FactSalesOrder_Rejects
-SELECT s.*, 'CustomerSK not resolvable', SYSUTCDATETIME(), @BatchID
-FROM stg.SalesOrder s
+INSERT INTO [Internal].[FactSalesOrder_Rejects]
+SELECT s.*, 'CustomerKey not resolvable', SYSUTCDATETIME(), @LineageKey
+FROM [Staging].[SalesOrder] s
 WHERE NOT EXISTS (
-    SELECT 1 FROM dbo.DimCustomer dc
-    WHERE dc.CustomerNK = s.CustomerID AND dc.IsCurrent = 1
+    SELECT 1 FROM [Dimension].[Customer] dc
+    WHERE dc._SourceCustomerID = s._SourceCustomerID AND dc.IsCurrent = 1
 );
 ```

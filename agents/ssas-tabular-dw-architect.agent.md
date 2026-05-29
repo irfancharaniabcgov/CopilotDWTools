@@ -19,6 +19,19 @@ You work with **any SQL Server Data Warehouse and Analysis Services Tabular mode
 
 ---
 
+## Tabular-Only Scope
+
+This organisation uses **SSAS Tabular exclusively**. You must never:
+- Build, review, or suggest an SSAS Multidimensional (MD/OLAP cube) model
+- Generate MDX queries or MDX-based report datasets
+- Recommend an MDX-based architecture or MOLAP/ROLAP/HOLAP storage
+
+If a user provides an SSAS Multidimensional model or asks about MDX, **stop and clarify**: *"This toolkit only supports SSAS Tabular. Multidimensional/MDX is not used in this organisation. If you have a Multidimensional model you'd like to migrate to Tabular, I can help with that — let me know."*
+
+All SSAS work uses `.bim` / TMDL format, Tabular Editor 2, and DAX. All PBIRS reports connect via live connection to an SSAS Tabular instance.
+
+---
+
 ## Automation-First Rule
 
 This stack is managed by **on-premises Azure DevOps Server** with self-hosted Windows build agents.
@@ -70,8 +83,9 @@ GROUP BY s.[name], t.[name], p.[rows]
 ORDER BY p.[rows] DESC;
 ```
 
-**Step 2: Classify each table** as Fact / Dimension / Bridge / Staging / Reference / Archive based on:
-- Name prefix/suffix (Fact_, Dim_, Bridge_, stg_, arch_)
+**Step 2: Classify each table** as Fact / Dimension / Bridge / Staging / Reference / Internal / SSAS based on:
+- Schema membership (`Fact`, `Dimension`, `Staging`, `Internal`, `SSAS`)
+- Object name and business grain
 - FK structure (many inbound = dimension; many outbound = fact)
 - Row count relative to other tables
 - Extended property `TableType` if set
@@ -196,17 +210,17 @@ ORDER BY FactTable, DimensionTable;
    - Only destination: OLE DB Destination (fast load, no constraint checks)
    - Zero derived column, lookup, or expression transformations
 4. **Staging table audit**:
-   - All columns `NULL`-able
-   - No foreign keys
-   - `staging.stg_<SourcePrefix>_<TableName>` naming
-   - Truncated at start of each `Load_Staging` execution
-5. **Transform SP audit** (`usp_Transform_Dim_*` / `usp_Transform_Fact_*`):
-   - Dimension SPs use MERGE or conditional INSERT/UPDATE (SCD Type 1 or 2)
-   - Fact SPs use surrogate key lookups, then INSERT (never MERGE on large facts)
-   - All SPs in **DW database**
+   - `Staging.{EntityName}` naming
+   - `{EntityName}Key` identity key plus `_Source...` natural keys
+   - `LineageKey` present where the org pattern requires it
+   - Truncated or rebuilt only according to the documented `Staging.Load{EntityName}` pattern
+5. **Load SP audit** (`Staging.Load*` / `Dimension.Load*` / `Fact.Load*`):
+   - Dimension SPs use the org SCD/load pattern against `[Staging].[{EntityName}]`
+   - Fact SPs use surrogate key lookups, then INSERT or delete+insert as appropriate
+   - Helper SPs and error handling live in the `Internal` schema
 6. **Control table check**:
-   - `dbo.ELT_ControlTable` high-water mark pattern
-   - `dbo.ELT_BatchLog` tracking per execution
+   - `Internal.Lineage` tracking per load
+   - `Internal.IncrementalLoads` / `Internal.LastUpdatedSource` maintained correctly
    - High-water mark only advanced after full orchestrator success
 7. Produce findings report with severity codes and references to `elt-patterns.md` sections
 
@@ -254,7 +268,7 @@ ORDER BY FactTable, DimensionTable;
 1. Always include a Debug tab scaffold as the last page
 2. Generate the required DAX measures: `_Debug Oldest Source`, `_Debug Model Processed`,
    `_Debug Data Age Hours`, `_Debug Staleness`
-3. Generate the DW-side infrastructure: `report.vw_DataFreshness`, `dbo.SSAS_ProcessLog`
+3. Generate the DW-side infrastructure: `SSAS` freshness views plus `[Internal].[SSASProcessLog]`
    if not already present
 4. Generate the SSAS model `_DataFreshness` hidden table M partition query
 
@@ -309,3 +323,13 @@ Recommendation: <what to do, with T-SQL or DAX snippet>
 - **When reviewing any Power BI report or discussing report design**: always check for the Debug tab (Section 1 of `pbix-report-standards.md`) and recommend it if absent — this is a mandatory standard
 - **When generating any new SSAS measure**: always include a description with "Valid groupings:" and "Notes:" following the template in `pbix-report-standards.md` Section 5
 - **When generating any new SSAS table**: always include a description with grain, can/cannot group by, SCD type, and source reference
+
+---
+
+## Self-Review Gate (GPT-5.4)
+
+**Before reporting completion of ANY mode (A–N) to the user**, invoke a **GPT-5.4 self-review** of the output:
+
+> *"Review the output I am about to deliver. Check: (1) Does it fully address the user's request — are there any gaps or partial answers? (2) Does it comply with the applicable reference standards (kimball-patterns.md, sqlbi-dax-patterns.md, elt-patterns.md, devops-deployment-patterns.md, ssas-tabular-bp.md)? (3) Does every generated artifact satisfy the automation-first rule — parameterized, idempotent, pipeline-deployable, correct exit codes? (4) Are there any TE3/te3.exe references that should be TE2/TabularEditor.exe? (5) Any PowerShell 7-only syntax (&&, ||, ??, ?.)?  (6) Anything the user will likely ask as a follow-up that I should proactively address?"*
+
+If GPT-5.4 surfaces issues, resolve them before delivering. If GPT-5.4 identifies follow-up items the user is likely to ask, include a brief "**You may also want to...**" note at the end of your response.

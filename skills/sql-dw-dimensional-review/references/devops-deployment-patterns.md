@@ -26,7 +26,7 @@ On-Premises Azure DevOps Server
     ├── Self-hosted Build/Release Agent (Windows Server)
     │       ├── Visual Studio Build Tools (MSBuild, SqlPackage.exe)
     │       ├── SQL Server Integration Services (ISDeploymentWizard.exe)
-    │       ├── Tabular Editor CLI (te.exe or te3.exe)
+    │       ├── Tabular Editor 2 CLI (TabularEditor.exe — free, open-source)
     │       ├── Analysis Services PowerShell module (SqlServer)
     │       └── PowerShell 5.1+ / PowerShell Core
     │
@@ -47,885 +47,538 @@ On-Premises Azure DevOps Server
 
 ---
 
-## 1. ADO Classic Pipeline Structure (Primary)
-
-Azure DevOps Server uses **Classic Pipelines** — the visual task editor — as the primary
-deployment mechanism. Classic pipelines are configured through the ADO Server UI, not stored
-as YAML files in the repository.
-
-> **YAML pipelines are optional.** All PowerShell scripts in Sections 2–9 work identically
-> whether called from a Classic pipeline task or a YAML pipeline step. The scripts are what
-> matter; the pipeline type is a configuration choice.
-
-### Classic Release Pipeline Layout
-
-Configure a **Release Pipeline** in ADO Server with one stage per environment:
-
-```
-Release Pipeline: DW_Deploy
-│
-├── Stage: Deploy to DEV     (auto-triggers on Build completion)
-│   ├── Pre-deployment conditions: none (auto-deploy)
-│   └── Tasks:
-│       1. PowerShell: Deploy-DACPAC.ps1
-│       2. PowerShell: Deploy-SsisProject.ps1
-│       3. PowerShell: Deploy-SsasModel.ps1
-│       4. PowerShell: Process-SsasDatabase.ps1
-│       5. PowerShell: Deploy-PbixReports.ps1
-│
-├── Stage: Deploy to TEST    (manual trigger / approval gate)
-│   ├── Pre-deployment conditions: 1 approver required
-│   └── Tasks: (same 5 tasks, different variable group)
-│
-├── Stage: Deploy to UAT     (manual trigger / approval gate)
-│   ├── Pre-deployment conditions: 2 approvers required
-│   └── Tasks: (same 5 tasks, different variable group)
-│
-└── Stage: Deploy to PROD    (manual trigger / approval gate)
-    ├── Pre-deployment conditions: 2 approvers required
-    └── Tasks: (same 5 tasks, different variable group)
-```
-
-### Classic Build Pipeline Layout
-
-Configure a **Build Pipeline** in ADO Server to compile artifacts:
-
-```
-Build Pipeline: DW_Build
-│
-└── Agent Job: Build Artifacts
-    ├── Task: MSBuild — build SSDT DACPAC
-    │     Solution: Database\DW.sqlproj
-    │     MSBuild arguments: /p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\dacpac
-    │
-    ├── Task: MSBuild — build SSIS .ispac
-    │     Solution: SSIS\DW_ELT.sln
-    │     MSBuild arguments: /p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\ssis
-    │
-    └── Task: Publish Artifact — DWArtifacts
-          Path: $(Build.ArtifactStagingDirectory)
-```
-
-### Adding a PowerShell Task in Classic Pipeline
-
-Each deployment step is a **PowerShell** task configured as follows:
-
-```
-Task: PowerShell
-  Type:          File Path
-  Script Path:   $(System.DefaultWorkingDirectory)/DWArtifacts/scripts/Deploy-DACPAC.ps1
-  Arguments:     -SqlPackagePath "$(SqlPackagePath)"
-                 -DacpacPath "$(System.DefaultWorkingDirectory)/DWArtifacts/dacpac/DW.dacpac"
-                 -TargetServer "$(DW_SQL_SERVER)"
-                 -TargetDatabase "$(DW_DATABASE)"
-  ErrorActionPreference: Stop     (set in Advanced tab, or the script sets it itself)
-```
-
-> **All variable references** use `$(VariableName)` syntax in Classic pipelines.
-> Link a variable group to each stage via **Stage → Variables → Variable groups**.
-
-### Variable Group Setup
-
-Create one variable group per environment in **ADO Server → Library**:
-
-| Variable | Example (Dev) | Example (Prod) |
-|---|---|---|
-| `DW_SQL_SERVER` | `DEVDB01\DW` | `PRODDB01\DW` |
-| `DW_DATABASE` | `DW_Dev` | `DW_Prod` |
-| `SSAS_SERVER` | `DEVDB01\SSAS` | `PRODDB01\SSAS` |
-| `SSAS_DATABASE` | `DW_Model_Dev` | `DW_Model_Prod` |
-| `PBIRS_URL` | `http://devpbirs/reports` | `http://prodpbirs/reports` |
-| `PBIRS_FOLDER` | `/Reports/Dev` | `/Reports` |
-| `SSISDB_ENVIRONMENT` | `Dev` | `Prod` |
-
-Mark all credentials as **secret variables** (lock icon). Secret variables are never echoed in logs.
-
-Link groups: **Release Pipeline → Stage → Variables → Variable groups → Link variable group**.
-Each stage links its own group (DW-Dev, DW-Test, DW-UAT, DW-Prod).
-
-### Self-Hosted Agent Requirements
-
-The build/release agent must have these tools installed:
-
-| Tool | Used by |
-|---|---|
-| `SqlPackage.exe` | Deploy-DACPAC.ps1 |
-| `ISDeploymentWizard.exe` | Deploy-SsisProject.ps1 |
-| Tabular Editor CLI (`te3.exe`) | Deploy-SsasModel.ps1 |
-| PowerShell SqlServer module | Process-SsasDatabase.ps1 |
-| PowerShell 5.1+ | All scripts |
-
+## 1. ADO Classic Pipeline Structure (Primary)
+
+Azure DevOps Server uses **Classic Pipelines** - the visual task editor - as the primary
+deployment mechanism. Classic pipelines are configured through the ADO Server UI, not stored
+as YAML files in the repository.
+
+> **YAML pipelines are optional.** The production source of truth for these DW deployments is the
+> Classic build pipeline plus the Classic release pipeline stages described below.
+
+### Classic Release Pipeline Layout
+
+Configure a **Release Pipeline** in ADO Server with one stage per environment. Each stage uses the
+same five phases; only the linked variable values change.
+
+```
+Release Pipeline: DW_Deploy
+|
++-- Stage: Deploy to DEV / TEST / UAT / PROD
+|   +-- Phase 1: Deploy DW DB
+|   |   1. PowerShell: $(tool_create_sql_login)
+|   |   2. Command Line: $(sql_package_2019) publishes DW\Release\{ProjectName}.dacpac to $(dw_db_catalog)
+|   |   3. PowerShell: $(tool_run_sql_file) runs loadStaging.sql against source DB $(db_catalog)
+|   |
+|   +-- Phase 2: Deploy SSIS
+|   |   1. SSIS Deploy marketplace task (.ispac -> SSISDB)
+|   |   2. Replace Tokens on ssis_catalog_configuration.json
+|   |   3. Configure SSIS Catalog from the tokenized JSON file
+|   |
+|   +-- Phase 3: Deploy SSAS Tabular
+|   |   1. Command Line: TabularEditor schema check on $(artifact_dir)\SSAS\Model.bim
+|   |   2. Command Line: TabularEditor deploy to $(sass_server)\$(ssas_db) / $(ssas_catalog)
+|   |
+|   +-- Phase 4: Run ELT and Process SSAS
+|   |   1. PowerShell: $(tool_runDbaAgentJob) runs the single SQL Agent job $(agent_job_name)
+|   |
+|   `-- Phase 5: Deploy Reports
+|       1. PowerShell: $(tool_PBIRS-deployPbixReports)
+|
+`-- Each stage links:
+    - shared variable group: Tools
+    - environment-specific variables: db, db_server, db_catalog, dw_db_catalog, sass_server,
+      ssas_db, ssas_catalog, agent_job_name, reportPortalUri, rsFolderPath, reportsToUpdate,
+      and the required {DataSourceName}ConnectionString release variable(s)
+```
+
+### Classic Build Pipeline Layout
+
+Configure a **Build Pipeline** in ADO Server to produce the `drop` artifact in this order:
+
+```
+Build Pipeline: DW_Build
+|
+`-- Agent Job: Build Artifacts
+    1. NuGet restore
+    2. DW Build (Visual Studio Build) - builds DW\{ProjectName}.sln
+    3. Copy dacpac - **\**.dacpac -> $(Build.ArtifactStagingDirectory)\DW
+    4. Copy sql files - **\**.sql -> $(Build.ArtifactStagingDirectory)\DW\SQL (Flatten = true)
+    5. SSIS Build (Command Line / devenv.com) - {ProjectName}_SSIS.sln /Build Development
+    6. SSIS Copy ISPAC - **\**.ispac -> $(Build.ArtifactStagingDirectory)\SSIS (Flatten = true)
+    7. SSIS Copy catalog config - **\**.json -> $(Build.ArtifactStagingDirectory)\SSIS (Flatten = true)
+    8. TabularEditor - Best Practices Analyzer
+    9. TabularEditor - Validation Deployment
+   10. TabularEditor - Build (TMDL folder -> Model.bim)
+   11. Copy PBIX files - **\**.pbix -> $(Build.ArtifactStagingDirectory)\Reports (Flatten = true)
+   12. Publish Artifact - drop
+   13. Clean Agent Directories
+```
+
+### Adding a PowerShell Task in Classic Pipeline
+
+Production pipelines use **two task types** in Classic release/build definitions:
+
+**1. PowerShell task (`e213ff0f`)** - used for shared scripts in `E:\Tools\PowerShellScripts\`
+
+```
+Task Type:      PowerShell
+Display Name:   Run loadStaging.sql on source DB
+Type:           File Path
+File Path:      $(tool_run_sql_file)
+Arguments:      -sqlinstance "$(db_server)\$(db)"
+                -dbname "$(db_catalog)"
+                -file "$(artifact_dir)\DW\SQL\loadStaging.sql"
+```
+
+**2. Command Line task (`d9bafed4`)** - used for direct executables such as `sqlpackage.exe`
+and `TabularEditor.exe`
+
+```
+Task Type:      Command Line
+Display Name:   Deploy SSAS Tabular
+Filename:       $(tool_tabular_editor)
+Arguments:      "$(artifact_dir)\SSAS\Model.bim" -S "$(tool_tabular_editor_scripts_path)\SetConnectionStringFromEnv.cs" -D "Provider=MSOLAP;Data Source=$(sass_server)\$(ssas_db);" "$(ssas_catalog)" -O -C -V -E -R -M
+Working Folder: $(System.DefaultWorkingDirectory)
+```
+
+> **All variable references** use `$(VariableName)` syntax in Classic pipelines.
+> Link the shared **Tools** variable group plus the environment-specific variables to each stage.
+
+### Variable Group Setup
+
+Production pipelines use **two variable sources** per stage.
+
+**Shared variable group: `Tools`**
+
+| Variable | Value |
+|---|---|
+| `tool_tabular_editor` | `E:\Tools\TabularEditor\TabularEditor.exe` |
+| `tool_tabular_editor_scripts_path` | `E:\Tools\TabularEditor\Scripts` |
+| `tool_run_sql_file` | `E:\Tools\PowerShellScripts\runsqlfile.ps1` |
+| `tool_runDbaAgentJob` | `E:\Tools\PowerShellScripts\runDbaAgentJob.ps1` |
+| `tool_create_sql_login` | `E:\Tools\PowerShellScripts\createSqlLogin.ps1` |
+| `tool_PBIRS-deployPbixReports` | `E:\Tools\PowerShellScripts\PBIRS-deployPbixReports.ps1` |
+| `tool_archive_directory` | `E:\Tools\PowerShellScripts\archivedirectory.ps1` |
+| `tool_db_backup` | `E:\Tools\PowerShellScripts\backupdatabase.ps1` |
+| `tool_copyAndRestore` | `E:\Tools\PowerShellScripts\copyAndRefresh.ps1` |
+| `artifact_dir` | `$(System.DefaultWorkingDirectory)\$(Build.DefinitionName)\drop` |
+| `sql_package_2019` | `C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\Common7\IDE\Extensions\Microsoft\SQLDB\DAC\150\sqlpackage.exe` |
+
+**Environment-specific variables / stage overrides**
+
+| Variable | Purpose |
+|---|---|
+| `db` | SQL Server instance name |
+| `db_server` | SQL Server host name |
+| `db_catalog` | source OLTP/source-system database used by `loadStaging.sql` |
+| `dw_db_catalog` | DW target database for the DACPAC publish |
+| `sass_server` | SSAS host name used by the release pipeline (intentional variable name) |
+| `ssas_db` | SQL instance name on the SSAS server |
+| `ssas_catalog` | deployed SSAS catalog/database name |
+| `agent_job_name` | single SQL Agent job that runs ELT and SSAS processing |
+| `reportPortalUri` | PBIRS portal URL |
+| `rsFolderPath` | PBIRS destination folder |
+| `reportsToUpdate` | optional comma-separated PBIX names; blank = deploy all |
+| `{DataSourceName}ConnectionString` | release variable consumed by TabularEditor C# scripts (for example `CTS_EAO_DWConnectionString`) |
+
+Mark credentials as **secret variables**. Link both the shared `Tools` group and the environment-specific
+variables under **Stage -> Variables**.
+
+### Self-Hosted Agent Requirements
+
+The build/release agent must have these tools and modules installed:
+
+| Tool / Module | Install / Path | Used by |
+|---|---|---|
+| `sqlpackage.exe` | `$(sql_package_2019)` | DACPAC publish (Release Phase 1) |
+| `TabularEditor.exe` | `$(tool_tabular_editor)` in `E:\Tools\TabularEditor\` | BPA, validation deploy, `.bim` build, SSAS deploy |
+| Visual Studio `devenv.com` | `$(devenv_path)` | SSIS Build step |
+| SSIS Deploy marketplace extension | Installed in ADO Server | SSIS `.ispac` deployment |
+| SSIS Catalog Configuration marketplace extension | Installed in ADO Server | SSIS catalog environment configuration |
+| Replace Tokens extension | Installed in ADO Server | token replacement in `ssis_catalog_configuration.json` |
+| PowerShell module: **dbatools** | `Install-Module dbatools` | `runsqlfile.ps1`, `runDbaAgentJob.ps1`, `backupdatabase.ps1`, `createSqlLogin.ps1`, `copyAndRefresh.ps1` |
+| PowerShell module: **ReportingServicesTools** | `Install-Module ReportingServicesTools` | `PBIRS-deployPbixReports.ps1`, `PBIRS-deployPaginatedReports.ps1` |
+| PowerShell 5.1+ | Included with Windows Server | shared script execution |
+| 7-Zip (`7z.exe`) | [7-zip.org](https://www.7-zip.org/) | `archivedirectory.ps1` |
+
+> **Shared script library on the agent**: `E:\Tools\PowerShellScripts\`
+> The shared **Tools** variable group exposes these paths as `$(tool_*)` variables. Do not hardcode
+> agent paths in task configurations.
+
+---
+
+### Optional: YAML Pipeline Equivalent
+
+> Use YAML only if your team has moved to YAML-based pipelines or is using Azure DevOps Services.
+> For this environment, the Classic pipeline UI remains the source of truth. If a YAML version is
+> created, it should mirror the same task order, task types, and `Tools` variable references shown above.
+
 ---
-
-### Optional: YAML Pipeline Equivalent
-
-> Use YAML only if your team has moved to YAML-based pipelines or is using Azure DevOps Services.
-> The Classic pipeline above is the primary standard for this on-premises ADO Server environment.
-
-If YAML is preferred, the Classic pipeline above maps directly to:
-
-```yaml
-# azure-pipelines.yml — optional, not the primary standard
-trigger:
-  branches:
-    include:
-      - main
-      - release/*
-
-pool:
-  name: 'OnPremAgents'        # Name of your self-hosted agent pool
-
-variables:
-  - group: DW-$(Environment)  # DW-Dev, DW-Test, DW-Prod (selected at queue time)
-  - name: SqlPackagePath
-    value: 'C:\Program Files\Microsoft SQL Server\160\DAC\bin\SqlPackage.exe'
-  - name: TabularEditorPath
-    value: 'C:\Tools\TabularEditor\te3.exe'
-
-stages:
-  - stage: Build
-    jobs:
-      - job: BuildArtifacts
-        steps:
-          - task: MSBuild@1
-            displayName: 'Build SSDT DACPAC'
-            inputs:
-              solution: 'Database\DW.sqlproj'
-              msbuildArguments: '/p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\dacpac'
-
-          - task: MSBuild@1
-            displayName: 'Build SSIS Project'
-            inputs:
-              solution: 'SSIS\DW_ELT.sln'
-              msbuildArguments: '/p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\ssis'
-
-          - task: PublishBuildArtifacts@1
-            inputs:
-              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-              ArtifactName: 'DWArtifacts'
-
-  - stage: DeployDB
-    dependsOn: Build
-    jobs:
-      - deployment: DeployDACPAC
-        environment: '$(Environment)'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: PowerShell@2
-                  displayName: 'Deploy DACPAC'
-                  inputs:
-                    filePath: 'scripts/Deploy-DACPAC.ps1'
-                    arguments: >
-                      -SqlPackagePath "$(SqlPackagePath)"
-                      -DacpacPath "$(Pipeline.Workspace)\DWArtifacts\dacpac\DW.dacpac"
-                      -TargetServer "$(DW_SQL_SERVER)"
-                      -TargetDatabase "$(DW_DATABASE)"
-
-  - stage: DeploySsis
-    dependsOn: DeployDB
-    jobs:
-      - deployment: DeploySsisPackages
-        environment: '$(Environment)'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: PowerShell@2
-                  displayName: 'Deploy SSIS .ispac'
-                  inputs:
-                    filePath: 'scripts/Deploy-SsisProject.ps1'
-                    arguments: >
-                      -IsServerName "$(DW_SQL_SERVER)"
-                      -SsisDbFolder "DW"
-                      -ProjectName "DW_ELT"
-                      -IspacPath "$(Pipeline.Workspace)\DWArtifacts\ssis\DW_ELT.ispac"
-                      -EnvironmentName "$(Environment)"
-
-  - stage: DeploySsas
-    dependsOn: DeploySsis
-    jobs:
-      - deployment: DeployTabularModel
-        environment: '$(Environment)'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: PowerShell@2
-                  displayName: 'Deploy SSAS Tabular Model'
-                  inputs:
-                    filePath: 'scripts/Deploy-SsasModel.ps1'
-                    arguments: >
-                      -TabularEditorPath "$(TabularEditorPath)"
-                      -ModelPath "$(Pipeline.Workspace)\DWArtifacts\model"
-                      -SsasServer "$(SSAS_SERVER)"
-                      -DatabaseName "$(SSAS_DATABASE)"
-
-  - stage: DeployPbix
-    dependsOn: DeploySsas
-    jobs:
-      - deployment: DeployPbixReports
-        environment: '$(Environment)'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: PowerShell@2
-                  displayName: 'Deploy PBIX to PBIRS'
-                  inputs:
-                    filePath: 'scripts/Deploy-PbixReports.ps1'
-                    arguments: >
-                      -PbirsUrl "$(PBIRS_URL)"
-                      -PbixFolder "$(Pipeline.Workspace)\DWArtifacts\reports"
-                      -TargetFolder "$(PBIRS_FOLDER)"
-                      -SsasServer "$(SSAS_SERVER)"
-                      -SsasDatabase "$(SSAS_DATABASE)"
-```
-
+## 2. SSDT / DACPAC Deployment
+
+### Production Phase 1 Pattern (replaces `scripts/Deploy-DACPAC.ps1`)
+
+Production releases do **not** use a repo-local wrapper such as `Deploy-DACPAC.ps1`. The real
+Classic release pattern is a three-step **Deploy DW DB** phase:
+
+**Step 1 - PowerShell task (`e213ff0f`)**: `createSqlLogin.ps1`
+
+```
+Task Type:      PowerShell
+Display Name:   Create DW SQL Login
+Type:           File Path
+File Path:      $(tool_create_sql_login)
+Arguments:      -sqlInstance "$(db_server)\$(db)" -sqlLogin "dw" -sqlPass "dw"
+```
+
+> The `dw` SQL login and password are intentional for these environments.
+
+**Step 2 - Command Line task (`d9bafed4`)**: publish the DACPAC with `sqlpackage.exe`
+
+```
+Task Type:      Command Line
+Display Name:   Deploy DACPAC
+Filename:       $(sql_package_2019)
+Arguments:      /action:Publish /sourceFile:"$(artifact_dir)\DW\Release\{ProjectName}.dacpac" /targetconnectionstring:"Data Source=$(db_server)\$(db);Initial Catalog=$(dw_db_catalog);Integrated Security=True;Connection Timeout=150;Persist Security Info=False;"
+```
+
+> This uses **Windows Integrated Security** for the publish connection string, not the `dw` SQL login.
+
+**Step 3 - PowerShell task (`e213ff0f`)**: run `loadStaging.sql` on the source database
+
+```
+Task Type:      PowerShell
+Display Name:   Deploy loadStaging.sql
+Type:           File Path
+File Path:      $(tool_run_sql_file)
+Arguments:      -sqlinstance "$(db_server)\$(db)" -dbname "$(db_catalog)" -file "$(artifact_dir)\DW\SQL\loadStaging.sql"
+```
+
+> `loadStaging.sql` is executed against the **source database** `$(db_catalog)`, not the DW database.
+> This deploys the stored procedures that SSIS uses for incremental extraction.
+
+### SSDT Project Conventions for Automation
+
+- **Publish profiles** (`*.publish.xml`) per environment in `DW\PublishProfiles\`:
+  - `Dev.publish.xml`, `Test.publish.xml`, `Prod.publish.xml`
+  - Each profile contains only server/db overrides - no secrets
+- **Extended property scripts** in `Scripts\Post-Deployment\ExtendedProperties\` - use upsert pattern
+- **Pre/post-deploy scripts** must be idempotent (`IF NOT EXISTS ... / IF EXISTS ...`)
+- **SQLCMD variables** for environment-specific values referenced in scripts
+
 ---
-
-## 2. SSDT / DACPAC Deployment
-
-### Script: `scripts/Deploy-DACPAC.ps1`
-
-```powershell
-<#
-.SYNOPSIS
-    Deploy a DACPAC to SQL Server using SqlPackage.exe.
-    Idempotent — safe to run multiple times.
-#>
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $SqlPackagePath,
-    [Parameter(Mandatory)] [string] $DacpacPath,
-    [Parameter(Mandatory)] [string] $TargetServer,
-    [Parameter(Mandatory)] [string] $TargetDatabase,
-    [Parameter(Mandatory)] [string] $SqlUser,
-    [Parameter(Mandatory)] [string] $SqlPassword,
-    [string] $PublishProfile = '',
-    [switch] $WhatIf
-)
-
-$ErrorActionPreference = 'Stop'
-
-if (-not (Test-Path $SqlPackagePath)) {
-    Write-Error "SqlPackage.exe not found at: $SqlPackagePath"
-    exit 1
-}
-if (-not (Test-Path $DacpacPath)) {
-    Write-Error "DACPAC not found at: $DacpacPath"
-    exit 1
-}
-
-$action = if ($WhatIf) { 'DeployReport' } else { 'Publish' }
-
-$args = @(
-    "/Action:$action"
-    "/SourceFile:`"$DacpacPath`""
-    "/TargetServerName:`"$TargetServer`""
-    "/TargetDatabaseName:`"$TargetDatabase`""
-    "/TargetUser:`"$SqlUser`""
-    "/TargetPassword:`"$SqlPassword`""
-    "/p:BlockOnPossibleDataLoss=true"
-    "/p:DropObjectsNotInSource=false"     # Never drop objects not in model (safe default)
-    "/p:ExcludeObjectTypes=Logins;Users;Permissions;RoleMembership"
-)
-
-if ($PublishProfile) {
-    $args += "/Profile:`"$PublishProfile`""
-}
-
-Write-Host "Deploying DACPAC to [$TargetServer].[$TargetDatabase]..."
-$result = & "$SqlPackagePath" @args 2>&1
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "SqlPackage.exe failed with exit code $LASTEXITCODE`n$result"
-    exit 1
-}
-
-Write-Host "DACPAC deployment successful."
-exit 0
-```
-
-### SSDT Project Conventions for Automation
-
-- **Publish profiles** (`*.publish.xml`) per environment in `Database\PublishProfiles\`:
-  - `Dev.publish.xml`, `Test.publish.xml`, `Prod.publish.xml`
-  - Each profile contains only server/db overrides — no secrets
-- **Extended property scripts** in `Scripts\Post-Deployment\ExtendedProperties\` — use upsert pattern
-- **Pre/post-deploy scripts** must be idempotent (`IF NOT EXISTS ... / IF EXISTS ...`)
-- **SQLCMD variables** for environment-specific values referenced in scripts
-
+## 3. SSIS Package Deployment
+
+### Production Phase 2 Pattern (replaces `scripts/Deploy-SsisProject.ps1`)
+
+Production releases use three Classic tasks for **Deploy SSIS**:
+
+**Task 1 - SSIS Deploy marketplace task (`06d2a35b-20bd-4f63-b331-b89eb168517b`)**
+
+```
+sourcePath:         $(System.DefaultWorkingDirectory)/{ArtifactAlias}/drop/SSIS/{ProjectName}_SSIS.ispac
+destinationType:    ssisdb
+destinationServer:  $(db_server)\$(db)
+destinationPath:    /SSISDB/{ProjectName}-Dataload
+authType:           win
+whetherOverwrite:   yes
+whetherContinue:    no
+```
+
+**Task 2 - Replace Tokens marketplace task (`a8515ec8`)**
+
+```
+rootDirectory:  $(artifact_dir)/SSIS
+targetFiles:    ssis_catalog_configuration.json
+tokenPattern:   doublebraces   (#{...}#)
+```
+
+**Task 3 - Configure SSIS Catalog marketplace task (`ff0067f5`)**
+
+```
+configSource:     filePath
+configPath:       $(artifact_dir)/SSIS/ssis_catalog_configuration.json
+targetServer:     $(db_server)\$(db)
+authType:         win
+rollBackOnError:  true
+```
+
+### `ssis_catalog_configuration.json`
+
+- The file is stored with the SSIS solution in source control: `SSIS\{ProjectName}_SSIS\ssis_catalog_configuration.json`
+- It contains token placeholders in the form `#{VariableName}#`
+- The **Replace Tokens** task injects pipeline variable values into the JSON during release
+- The **Configure SSIS Catalog** task then reads that JSON and creates/updates SSISDB environment values
+- Standard variables configured this way are:
+  - `ssis_param_LoadType` = `I` (incremental)
+  - `ssis_param_SourceDB`
+  - `ssis_param_SourceServer`
+  - `ssis_param_TargetDB`
+  - `ssis_param_TargetServer`
+
+### SSISDB Environment Variables
+
+In production, SSIS catalog variables are managed from `ssis_catalog_configuration.json` plus the
+release variables above - not from an ad-hoc PowerShell deployment wrapper.
+
+### SSIS Project Conventions for Automation
+
+- **Project deployment model only** - never package deployment
+- **All connection strings via project parameters** mapped to SSISDB environment variables
+- **No hardcoded paths or server names** inside any SSIS package
+- **The orchestrator package is triggered indirectly** by the Phase 4 SQL Agent job, not by a separate
+  pipeline SQL snippet. The job runs the SSIS packages in sequence and then processes SSAS.
+
 ---
-
-## 3. SSIS Package Deployment
-
-### Script: `scripts/Deploy-SsisProject.ps1`
-
-```powershell
-<#
-.SYNOPSIS
-    Deploy a compiled SSIS .ispac file to SSISDB on SQL Server.
-    Creates the SSISDB catalog folder and project if they do not exist.
-    Maps the project to the specified SSISDB environment.
-#>
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $IsServerName,
-    [Parameter(Mandatory)] [string] $SsisDbFolder,
-    [Parameter(Mandatory)] [string] $ProjectName,
-    [Parameter(Mandatory)] [string] $IspacPath,
-    [Parameter(Mandatory)] [string] $EnvironmentName,
-    [string] $SsisDbName = 'SSISDB'
-)
-
-$ErrorActionPreference = 'Stop'
-
-if (-not (Test-Path $IspacPath)) {
-    Write-Error ".ispac not found: $IspacPath"
-    exit 1
-}
-
-# Load SSIS management assembly
-Add-Type -Path "C:\Windows\Microsoft.NET\assembly\GAC_MSIL\Microsoft.SqlServer.Management.IntegrationServices\*\Microsoft.SqlServer.Management.IntegrationServices.dll" -ErrorAction Stop
-
-$connectionString = "Data Source=$IsServerName;Initial Catalog=master;Integrated Security=SSPI;"
-$sqlConnection    = New-Object System.Data.SqlClient.SqlConnection $connectionString
-$integrationServices = New-Object Microsoft.SqlServer.Management.IntegrationServices.IntegrationServices $sqlConnection
-
-$catalog = $integrationServices.Catalogs[$SsisDbName]
-if (-not $catalog) {
-    Write-Error "SSISDB catalog not found on $IsServerName. Create the SSIS catalog first."
-    exit 1
-}
-
-# Ensure folder exists
-$folder = $catalog.Folders[$SsisDbFolder]
-if (-not $folder) {
-    Write-Host "Creating SSISDB folder: $SsisDbFolder"
-    $folder = New-Object Microsoft.SqlServer.Management.IntegrationServices.CatalogFolder(
-        $catalog, $SsisDbFolder, "DW ELT packages")
-    $folder.Create()
-}
-
-# Deploy project
-Write-Host "Deploying $ProjectName from $IspacPath..."
-$projectBytes = [System.IO.File]::ReadAllBytes($IspacPath)
-$folder.DeployProject($ProjectName, $projectBytes) | Out-Null
-Write-Host "Project deployed."
-
-# Map to environment reference
-$project = $folder.Projects[$ProjectName]
-$envRef  = $project.References | Where-Object { $_.EnvironmentName -eq $EnvironmentName }
-if (-not $envRef) {
-    Write-Host "Adding environment reference: $EnvironmentName"
-    $project.References.Add($EnvironmentName, $SsisDbFolder)
-    $project.Alter()
-}
-
-Write-Host "SSIS project deployment complete."
-exit 0
-```
-
-### SSISDB Environment Variables
-
-Configure environment variables once per environment (Dev/Test/Prod). Map project parameters to them:
-
-```sql
--- Create environment (run once per environment)
-DECLARE @folder_id BIGINT;
-SELECT @folder_id = folder_id FROM SSISDB.catalog.folders WHERE name = N'DW';
-
-EXEC SSISDB.catalog.create_environment
-    @environment_name = N'Prod',
-    @folder_name      = N'DW';
-
--- Add variables
-EXEC SSISDB.catalog.create_environment_variable
-    @environment_name = N'Prod',
-    @folder_name      = N'DW',
-    @variable_name    = N'SourceConnectionString',
-    @sensitive        = 1,
-    @data_type        = N'String',
-    @string_value     = N'Data Source=PRODDB01;Initial Catalog=SourceDB;Integrated Security=SSPI;';
-
--- Map project parameter to environment variable
-EXEC SSISDB.catalog.set_object_parameter_value
-    @object_type        = 20,   -- 20 = Project
-    @folder_name        = N'DW',
-    @project_name       = N'DW_ELT',
-    @parameter_name     = N'SourceConnectionString',
-    @parameter_value    = N'SourceConnectionString',
-    @value_type         = R;    -- R = referenced from environment
-```
-
-### SSIS Project Conventions for Automation
-
-- **Project deployment model only** — never package deployment (no `.dtsx` file-based deployment)
-- **All connection strings via project parameters** mapped to SSISDB environment variables
-- **No hardcoded paths or server names** inside any SSIS package
-- **Master_Orchestrator.dtsx** is the only package executed from SQL Agent — one job, one step:
-
-```sql
--- SQL Agent job step (T-SQL type)
-DECLARE @execution_id BIGINT;
-EXEC SSISDB.catalog.create_execution
-    @package_name     = N'Master_Orchestrator.dtsx',
-    @project_name     = N'DW_ELT',
-    @folder_name      = N'DW',
-    @use32bitruntime  = 0,
-    @reference_id     = (
-        SELECT reference_id FROM SSISDB.catalog.environment_references er
-        JOIN SSISDB.catalog.projects p ON er.project_id = p.project_id
-        JOIN SSISDB.catalog.folders f  ON p.folder_id   = f.folder_id
-        WHERE f.name = N'DW' AND p.name = N'DW_ELT' AND er.environment_name = N'Prod'
-    ),
-    @execution_id     = @execution_id OUTPUT;
-
--- Pass load window (set by control table logic or pipeline variable)
-EXEC SSISDB.catalog.set_execution_parameter_value
-    @execution_id   = @execution_id,
-    @object_type    = 50,       -- 50 = execution
-    @parameter_name = N'LoadWindowStart',
-    @parameter_value = @LoadWindowStart;
-
-EXEC SSISDB.catalog.set_execution_parameter_value
-    @execution_id   = @execution_id,
-    @object_type    = 50,
-    @parameter_name = N'LoadWindowEnd',
-    @parameter_value = @LoadWindowEnd;
-
-EXEC SSISDB.catalog.start_execution @execution_id;
-
--- Wait for completion
-DECLARE @status INT = 1;
-WHILE @status NOT IN (4, 7, 9)      -- 4=Succeeded, 7=Canceled, 9=Stopped, 5=Failed
-BEGIN
-    WAITFOR DELAY '00:00:10';
-    SELECT @status = [status] FROM SSISDB.catalog.executions
-    WHERE execution_id = @execution_id;
-END
-
-IF @status <> 4
-BEGIN
-    RAISERROR('SSIS execution failed. Check SSISDB.catalog.operation_messages.', 16, 1);
-END
-```
-
+## 4. SSAS Tabular Model Deployment
+
+### Environment Naming Convention
+
+The source-controlled model folder name and the deployed SSAS catalog name are related but not
+identical:
+
+| Artifact | Example |
+|---|---|
+| TMDL folder / model source | `EAO_Tabular`, `ESB_Tabular` |
+| Release target catalog (`$(ssas_catalog)`) | `EAO_UAT`, `ESB_UAT` |
+| SSAS server / instance | `$(sass_server)\$(ssas_db)` |
+
+Developers can still deploy locally for development, but release stages deploy the validated build
+artifact to the environment-specific `$(ssas_catalog)`.
+
+### Source Control: Always Use TMDL Folder
+
+- The **TMDL folder** is the source of truth in git
+- Tabular Editor workflow: **Open from folder** -> edit -> **Save as folder** -> commit
+- TMDL gives granular git diffs: one `.tmdl` file per table/role/relationship
+
+### Build vs. Release: TMDL -> `.bim` Workflow
+
+- The **TMDL folder** is the source-control format used in `SSAS\{ModelName}\`
+- **Build step 10** runs `TabularEditor.exe -B` to convert that TMDL folder into `$(Build.ArtifactStagingDirectory)\SSAS\Model.bim`
+- The build also performs a **validation deployment** first, using `ClearConnectionString.cs`, to prove the model compiles and can deploy
+- The **release pipeline deploys `Model.bim`**, not the TMDL folder
+- This guarantees the exact artifact validated during build is the artifact promoted through release
+
+### Option A: Tabular Editor CLI (Recommended)
+
+Production releases use **two Command Line tasks** in Phase 3.
+
+**Step 1 - TabularEditor Schema Check (`d9bafed4`)**
+
+```
+Task Type:      Command Line
+Display Name:   TabularEditor Schema Check
+Filename:       $(tool_tabular_editor)
+Arguments:      "$(artifact_dir)\SSAS\Model.bim" -S "$(tool_tabular_editor_scripts_path)\SetConnectionStringFromEnv.cs" -SC -V
+```
+
+**Step 2 - TabularEditor Deploy (`d9bafed4`)**
+
+```
+Task Type:      Command Line
+Display Name:   Deploy SSAS Tabular
+Filename:       $(tool_tabular_editor)
+Arguments:      "$(artifact_dir)\SSAS\Model.bim" -S "$(tool_tabular_editor_scripts_path)\SetConnectionStringFromEnv.cs" -D "Provider=MSOLAP;Data Source=$(sass_server)\$(ssas_db);" "$(ssas_catalog)" -O -C -V -E -R -M
+```
+
+Notes:
+- Both steps deploy from the built `Model.bim` artifact
+- `SetConnectionStringFromEnv.cs` reads release variables named `{DataSourceName}ConnectionString`
+- Deploy flags used in production are `-O -C -V -E -R -M`
+
+### Option B: XMLA Script via PowerShell (AMO / SqlServer module)
+
+Production DW pipelines do **not** use a separate XMLA PowerShell deployment step. The real
+pattern is the two TabularEditor Command Line tasks above.
+
+### SSAS Processing Script
+
+SSAS processing is **not** a separate pipeline script or task in the production release definition.
+It is executed by the single Phase 4 SQL Agent job that runs ELT and then processes the model.
+
+### TabularEditor Custom C# Scripts
+
+These scripts are deployed with the TabularEditor tools package in `E:\Tools\TabularEditor\Scripts\`.
+The development source is `C:\Projects\ISBDevOps\TabularEditor\Scripts\`.
+
+| Script | Purpose | Inputs / Behavior | Used in |
+|---|---|---|---|
+| `SetConnectionStringFromEnv.cs` | Set SQL login-style provider connection strings before schema check or deploy | Reads environment variables named `{DataSourceName}ConnectionString` and applies them to matching `ProviderDataSource` objects | Release Phase 3 schema check + deploy |
+| `SetADConnectionStringFromEnv.cs` | Alternative for Windows / AD impersonation deployments | Reads `service_account`, `service_account_pass`, and `{DataSourceName}ConnectionString`; sets connection string, account, password, and impersonation mode | Available for environments that need AD impersonation; not used in current pipelines |
+| `ClearConnectionString.cs` | Remove real connection strings before build-time validation deploy | Replaces each provider data source connection string with the data source name placeholder | Build step 9 validation deployment |
+
+### SSAS Deployment Conventions
+
+- **Source of truth in git**: TMDL folder under `SSAS\{ModelName}\`
+- **Release deployment artifact**: `Model.bim` built from TMDL in the build pipeline
+- **Do not deploy from Visual Studio GUI or SSAS Deployment Wizard** - use TabularEditor Command Line tasks
+- **Connection strings are injected at release time** by `SetConnectionStringFromEnv.cs` reading ADO release variables
+- **Retain partitions on deploy** via `-R`
+- **SSAS processing is not its own phase** - it is part of the same Phase 4 SQL Agent job that runs ELT
+
 ---
-
-## 4. SSAS Tabular Model Deployment
-
-### Environment Naming Convention
-
-Each SSAS environment has a dedicated database with a `_<ENV>` suffix:
-
-| Environment | Database Name | Deployed by |
-|---|---|---|
-| Developer local | `<ModelName>_DEV` | Developer (Tabular Editor, manual) |
-| Shared test | `<ModelName>_TEST` | ADO pipeline |
-| UAT | `<ModelName>_UAT` | ADO pipeline |
-| Production | `<ModelName>_PROD` | ADO pipeline |
-
-Example: `EAO_Tabular_DEV`, `EAO_Tabular_TEST`, `EAO_Tabular_UAT`, `EAO_Tabular_PROD`
-
-Developers manually deploy only to `_DEV`. The ADO pipeline promotes the TMDL folder from git
-through TEST → UAT → PROD. See `ssas-tabular-bp.md` for the full developer workflow.
-
-### Source Control: Always Use TMDL Folder
-
-- The **TMDL folder** is the source of truth in git (not `.bim`)
-- Tabular Editor workflow: **Open from folder** → deploy to `_DEV` → edit → **Save as folder** → commit
-- TMDL gives granular git diffs: one `.tmdl` file per table/role/relationship
-
-### Option A: Tabular Editor CLI (Recommended)
-
-```powershell
-# scripts/Deploy-SsasModel.ps1
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $TabularEditorPath,   # path to te3.exe or te.exe
-    [Parameter(Mandatory)] [string] $ModelPath,           # TMDL folder path (preferred) or .bim file
-    [Parameter(Mandatory)] [string] $SsasServer,
-    [Parameter(Mandatory)] [string] $DatabaseName,        # e.g. EAO_Tabular_TEST
-    [switch] $WhatIf
-)
-
-$ErrorActionPreference = 'Stop'
-
-if (-not (Test-Path $TabularEditorPath)) {
-    Write-Error "Tabular Editor CLI not found: $TabularEditorPath"
-    exit 1
-}
-if (-not (Test-Path $ModelPath)) {
-    Write-Error "Model path not found: $ModelPath"
-    exit 1
-}
-
-if ($WhatIf) {
-    Write-Host "WhatIf: Would deploy [$ModelPath] to [$SsasServer/$DatabaseName]"
-    exit 0
-}
-
-Write-Host "Deploying SSAS Tabular model to $SsasServer / $DatabaseName..."
-Write-Host "  Source: $ModelPath"
-
-# te3.exe / TabularEditor.exe syntax:
-#   <model_path> -deploy <server> <database> [-O overwrite] [-R retain partitions] [-P deploy roles] -v
-$result = & "$TabularEditorPath" "$ModelPath" `
-    -deploy "$SsasServer" "$DatabaseName" `
-    -O `    # Overwrite existing database
-    -R `    # Retain existing partitions (preserves incremental partition data)
-    -P `    # Deploy roles
-    -v 2>&1
-
-Write-Host $result
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Tabular Editor deploy failed with exit code $LASTEXITCODE"
-    exit 1
-}
-
-Write-Host "SSAS model deployment successful: $DatabaseName"
-exit 0
-```
-
-**In the ADO pipeline**, call this script per environment:
-
-```yaml
-- task: PowerShell@2
-  displayName: 'Deploy SSAS Model to TEST'
-  inputs:
-    filePath: 'scripts/Deploy-SsasModel.ps1'
-    arguments: >
-      -TabularEditorPath "$(TabularEditorPath)"
-      -ModelPath "$(Pipeline.Workspace)/DWArtifacts/ssas/EAO_Tabular"
-      -SsasServer "$(SSAS_SERVER)"
-      -DatabaseName "$(SSAS_DATABASE)"   # = EAO_Tabular_TEST in DW-Test variable group
-```
-
-### Option B: XMLA Script via PowerShell (AMO / SqlServer module)
-
-```powershell
-# scripts/Invoke-SsasXmla.ps1
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $SsasServer,
-    [Parameter(Mandatory)] [string] $XmlaScriptPath   # path to .xmla file
-)
-
-$ErrorActionPreference = 'Stop'
-
-Import-Module SqlServer -ErrorAction Stop
-
-Write-Host "Executing XMLA script on $SsasServer..."
-Invoke-ASCmd -Server $SsasServer -InputFile $XmlaScriptPath
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "XMLA execution failed."
-    exit 1
-}
-
-Write-Host "XMLA execution complete."
-exit 0
-```
-
-### SSAS Processing Script
-
-```powershell
-# scripts/Process-SsasDatabase.ps1
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $SsasServer,
-    [Parameter(Mandatory)] [string] $DatabaseName,
-    [ValidateSet('Full','Default','Calculate','Automatic')]
-    [string] $ProcessType = 'Default'
-)
-
-$ErrorActionPreference = 'Stop'
-Import-Module SqlServer -ErrorAction Stop
-
-Write-Host "Processing $DatabaseName on $SsasServer ($ProcessType)..."
-
-$xmla = @"
-{
-  "refresh": {
-    "type": "$($ProcessType.ToLower())",
-    "objects": [
-      {
-        "database": "$DatabaseName"
-      }
-    ]
-  }
-}
-"@
-
-Invoke-ASCmd -Server $SsasServer -Query $xmla -QueryType Json
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "SSAS processing failed."
-    exit 1
-}
-
-Write-Host "SSAS processing complete."
-exit 0
-```
-
-### SSAS Deployment Conventions
-
-- **Source of truth**: TMDL folder in git — **not** `.bim`, not VS SSAS project
-- **Developer workflow**: Open from folder → deploy to `_DEV` → edit → Save as folder → commit. See `ssas-tabular-bp.md` Developer Workflow section.
-- **Environment databases**: `_DEV` (developer), `_TEST`, `_UAT`, `_PROD` (pipeline only)
-- **Do not deploy from Visual Studio GUI or SSAS Deployment Wizard** — always use Tabular Editor CLI
-- **Always pass `-R` (retain partitions)** in the deploy command to preserve incremental partition data from prior process runs
-- **Data source connection string** in the model is parameterized — the pipeline variable group supplies the correct `_TEST`/`_UAT`/`_PROD` DW server and database per environment
-- **Process after deploy**: separate pipeline step so a failed deploy doesn't leave a partially-processed model
-- **Full process on schema change** (new tables/columns); `Default` for data refresh; `Calculate` after relationship-only changes
-
+## 5. Power BI Report Server (PBIRS) Deployment
+
+Three scripts cover all PBIRS deployment scenarios. All use the **`ReportingServicesTools`** PowerShell
+module and Windows authentication (`-UseDefaultCredentials`).
+
+> **Shared script path on the agent**: `E:\Tools\PowerShellScripts\`
+
+---
+
+### Script: `PBIRS-deployPbixReports.ps1` - Deploy Power BI (.pbix) Reports
+
+Uploads `.pbix` files to PBIRS, then updates the SSAS connection string per environment.
+Run this for **live-connection Power BI reports** (connected to SSAS Tabular).
+
+```
+Parameters:
+  -reportPortalUri    URL of PBIRS (e.g. "https://test-reports.econ.gov.bc.ca/reports")
+  -localFolderPath    Local folder containing .pbix files
+  -rsFolderPath       PBIRS target folder path (e.g. "/EAO")
+  -instance           SSAS server\instance (e.g. "$(sass_server)\$(ssas_db)")
+  -database           SSAS database name (e.g. "$(ssas_catalog)")
+  -reportsToUpdate    Optional - comma-separated list of report names to deploy
+                      Omit to deploy all .pbix files in localFolderPath
+  -accountName        Service account for datasource credential store (optional)
+  -accountPass        Service account password (optional; mark as secret)
+```
+
+**ADO Classic Pipeline task - Deploy PBIX:**
+```
+Task Type:      PowerShell
+Display Name:   Deploy PBIX Reports to PBIRS
+Type:           File Path
+File Path:      $(tool_PBIRS-deployPbixReports)
+Arguments:      -reportPortalUri "$(reportPortalUri)"
+                -localFolderPath "$(localFolderPath)"
+                -rsFolderPath "$(rsFolderPath)"
+                -instance "$(sass_server)\$(ssas_db)"
+                -database "$(ssas_catalog)"
+                -reportsToUpdate "$(reportsToUpdate)"
+```
+
+> **What this script does**: Uploads each `.pbix` (using `Write-RsRestCatalogItem`), then calls
+> the PBIRS REST API to update the data source connection string to the environment-specific SSAS
+> instance. Also tests the data source connection after update.
+
+---
+
+### Script: `PBIRS-deployPaginatedReports.ps1` - Deploy Paginated (.rdl) Reports
+
+Deploys `.rdl`, `.rsd` (datasets), and `.rds` (data sources) to PBIRS. Configures the data
+source with stored credentials. Verifies the connection after deployment.
+
+```
+Parameters:
+  -ReportServiceHost      URI of PBIRS host (e.g. "https://prod-reports.example.gov.bc.ca")
+  -ReportSourceFolder     Local folder containing .rdl/.rsd/.rds files
+  -ReportDeployFolder     PBIRS target folder path
+  -DatabaseConnectionString  Connection string for the data source
+  -DatabaseUser           Data source username
+  -DatabasePass           Data source password (mark as secret)
+```
+
+> **Important notes from script**:
+> - Files are deployed in order: DataSources -> DataSets -> Reports (to preserve references)
+> - Assumes a single data source per project - multi-datasource projects need manual configuration
+> - Deploys with `-Overwrite` - safe to redeploy
+
+**ADO Classic Pipeline task - Deploy Paginated Reports:**
+```
+Task Type:      PowerShell
+Display Name:   Deploy Paginated Reports to PBIRS
+Type:           File Path
+Script Path:    E:\Tools\PowerShellScripts\PBIRS-deployPaginatedReports.ps1
+Arguments:      -ReportServiceHost "$(reportPortalUri)"
+                -ReportSourceFolder "$(System.DefaultWorkingDirectory)\$(Release.PrimaryArtifactSourceAlias)\PaginatedReports\"
+                -ReportDeployFolder "$(rsFolderPath)"
+                -DatabaseConnectionString "$(DW_CONNECTION_STRING)"
+                -DatabaseUser "$(DB_USER)"
+                -DatabasePass "$(DB_PASS)"
+```
+
+---
+
+### Script: `PBIRS-updateConnection.ps1` - Update Connection String Only
+
+Updates the SSAS connection string for reports already deployed to PBIRS. Use this when
+the PBIRS report does not need to be re-uploaded (file unchanged) but the target SSAS
+server/database has changed (e.g., post-restore or environment reconfiguration).
+
+```
+Parameters:
+  -reportPortalUri    URL of PBIRS
+  -localFolderPath    Local folder (used only for reference - not re-uploaded)
+  -rsFolderPath       PBIRS folder path (include trailing /)
+  -instance           SSAS server\instance
+  -database           SSAS database
+  -reportsToUpdate    Mandatory - comma-separated list of specific report names to update
+  -accountName        Service account (optional)
+  -accountPass        Service account password (optional)
+```
+
+---
+
+### PBIRS Deployment Conventions
+
+- **Live connection `.pbix` reports** contain no embedded data - only SSAS connection metadata
+- **Ordered deployment**: SSAS model must be deployed and processed before PBIRS reports
+- **Connection string format**: `Data Source=<server>;Initial Catalog=<database>;Cube=Model`
+- **TLS 1.2**: The PBIRS scripts force `[Net.ServicePointManager]::SecurityProtocol = Tls12`
+  - required because PBIRS servers may default to TLS 1.0
+- **`ReportingServicesTools` module** must be installed on the build/release agent
+- **Naming**: PBIX file name = report name in PBIRS - use consistent file naming across environments
+- **PBIRS folder structure** mirrors environment, set via `$(rsFolderPath)` variable group variable:
+  - Dev: `/Reports/Dev`, Test: `/Reports/Test`, Prod: `/Reports`
+
 ---
-
-## 5. Power BI Report Server (PBIRS) Deployment
-
-### Script: `scripts/Deploy-PbixReports.ps1`
-
-```powershell
-<#
-.SYNOPSIS
-    Upload .pbix files to Power BI Report Server using the PBIRS REST API.
-    Creates the target folder if it does not exist.
-    Idempotent — overwrites existing reports.
-#>
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $PbirsUrl,         # http://server/reports
-    [Parameter(Mandatory)] [string] $PbixFolder,       # local folder containing .pbix files
-    [Parameter(Mandatory)] [string] $TargetFolder,     # PBIRS target folder path, e.g. /Reports/Finance
-    [Parameter(Mandatory)] [string] $SsasServer,       # SSAS server for data source update
-    [Parameter(Mandatory)] [string] $SsasDatabase,     # SSAS database for data source update
-    [Parameter(Mandatory)] [string] $PbirsUser,
-    [Parameter(Mandatory)] [string] $PbirsPassword
-)
-
-$ErrorActionPreference = 'Stop'
-
-$credential = [Convert]::ToBase64String(
-    [Text.Encoding]::ASCII.GetBytes("${PbirsUser}:${PbirsPassword}"))
-$headers = @{
-    Authorization  = "Basic $credential"
-    'Content-Type' = 'application/json'
-}
-$apiBase = "$PbirsUrl/api/v2.0"
-
-# Ensure target folder exists
-function Ensure-PbirsFolder {
-    param([string] $FolderPath)
-    $encoded = [Uri]::EscapeDataString($FolderPath)
-    $check = Invoke-RestMethod "$apiBase/Folders?`$filter=Path eq '$FolderPath'" `
-        -Headers $headers -Method Get -ErrorAction SilentlyContinue
-    if (-not $check.value) {
-        $parentPath = ($FolderPath -split '/' | Select-Object -SkipLast 1) -join '/'
-        if (-not $parentPath) { $parentPath = '/' }
-        $folderName  = $FolderPath.Split('/')[-1]
-        $body = @{ Name = $folderName; Path = $FolderPath } | ConvertTo-Json
-        Invoke-RestMethod "$apiBase/Folders" -Headers $headers -Method Post -Body $body | Out-Null
-        Write-Host "Created PBIRS folder: $FolderPath"
-    }
-}
-
-Ensure-PbirsFolder -FolderPath $TargetFolder
-
-# Upload each .pbix file
-Get-ChildItem -Path $PbixFolder -Filter '*.pbix' | ForEach-Object {
-    $pbixFile  = $_.FullName
-    $reportName = $_.BaseName
-    Write-Host "Uploading $reportName..."
-
-    # Check if report already exists
-    $existingUrl = "$apiBase/PowerBIReports?`$filter=Name eq '$reportName' and Path eq '$TargetFolder/$reportName'"
-    $existing    = Invoke-RestMethod $existingUrl -Headers $headers -Method Get -ErrorAction SilentlyContinue
-
-    $uploadHeaders = $headers.Clone()
-    $uploadHeaders['Content-Type'] = 'application/octet-stream'
-
-    if ($existing.value) {
-        # Update existing
-        $itemId = $existing.value[0].Id
-        Invoke-RestMethod "$apiBase/PowerBIReports($itemId)/Content" `
-            -Headers $uploadHeaders -Method Put -InFile $pbixFile | Out-Null
-        Write-Host "  Updated: $reportName"
-    } else {
-        # Create new — POST as multipart/form-data with catalog item wrapper
-        $nameHeader  = @{ headers = $headers.Clone() }
-        $createBody  = @{
-            '@odata.type' = '#Model.PowerBIReport'
-            Name          = $reportName
-            Path          = "$TargetFolder/$reportName"
-        } | ConvertTo-Json
-
-        # Step 1: Create catalog item
-        $created = Invoke-RestMethod "$apiBase/PowerBIReports" `
-            -Headers $headers -Method Post -Body $createBody
-        $itemId  = $created.Id
-
-        # Step 2: Upload content
-        Invoke-RestMethod "$apiBase/PowerBIReports($itemId)/Content" `
-            -Headers $uploadHeaders -Method Put -InFile $pbixFile | Out-Null
-        Write-Host "  Created: $reportName"
-    }
-
-    # Update the SSAS data source connection to match environment
-    Update-PbirsDataSource -ApiBase $apiBase -Headers $headers `
-        -ReportId $itemId -SsasServer $SsasServer -SsasDatabase $SsasDatabase
-}
-
-function Update-PbirsDataSource {
-    param($ApiBase, $Headers, $ReportId, $SsasServer, $SsasDatabase)
-    $dataSources = Invoke-RestMethod "$ApiBase/PowerBIReports($ReportId)/DataSources" `
-        -Headers $Headers -Method Get
-    foreach ($ds in $dataSources.value) {
-        if ($ds.DataSourceType -eq 'AnalysisServices') {
-            $updateBody = @{
-                DataSourceType      = 'AnalysisServices'
-                ConnectionString    = "Data Source=$SsasServer;Initial Catalog=$SsasDatabase"
-                CredentialRetrieval = 'Integrated'
-            } | ConvertTo-Json
-            Invoke-RestMethod "$ApiBase/DataSources($($ds.Id))" `
-                -Headers $Headers -Method Patch -Body $updateBody | Out-Null
-            Write-Host "  Updated data source to $SsasServer / $SsasDatabase"
-        }
-    }
-}
-
-Write-Host "PBIRS deployment complete."
-exit 0
-```
-
-### PBIRS Deployment Conventions
-
-- `.pbix` files for **live connection** reports contain no data — only model connection metadata
-- Data source connection string is updated post-upload to match environment (see `Update-PbirsDataSource` above)
-- **PBIRS folder structure** mirrors environment: `/Reports`, `/Reports/Finance`, `/Reports/Operations`
-- **Naming convention**: PBIX file name becomes the report name in PBIRS — use consistent naming
-- `ReportingServicesTools` PowerShell module (Microsoft open-source) is an alternative to direct REST API calls for older PBIRS versions
-
+## 6. ELT Triggering from ADO Pipeline
+
+SQL Agent is the production mechanism for triggering both SSIS ELT execution and SSAS processing
+from the ADO pipeline. Use `runDbaAgentJob.ps1` from the shared library via `$(tool_runDbaAgentJob)`.
+
+> **Shared script path on the agent**: `E:\Tools\PowerShellScripts\runDbaAgentJob.ps1`
+
+### Script: `runDbaAgentJob.ps1` - Start SQL Agent Job and Wait
+
+Starts a named SQL Agent job using dbatools and **waits for completion**, failing the pipeline
+if the job fails.
+
+```
+Parameters:
+  -sqlInstance    SQL Server instance hosting the Agent job (production pattern: "$(sass_server)\$(ssas_db)")
+  -jobName        Name of the SQL Agent job to execute (production pattern: "$(agent_job_name)")
+```
+
+**What it does:**
+1. Gets the job object from SQL Agent via `Get-DbaAgentJob`
+2. Starts it with `Start-DbaAgentJob -Wait`
+3. Checks `LastRunOutcome` and exits non-zero if the job did not succeed
+
+**ADO Classic Pipeline task - Run ELT and Process SSAS:**
+```
+Task Type:      PowerShell
+Display Name:   Run ELT and Process SSAS
+Type:           File Path
+File Path:      $(tool_runDbaAgentJob)
+Arguments:      -sqlInstance "$(sass_server)\$(ssas_db)"
+                -jobName "$(agent_job_name)"
+```
+
+> There is **one task** here, not separate ELT and SSAS-processing tasks.
+
+### SQL Agent Job Conventions for SSIS / SSAS
+
+- **One job per environment** named `{ENV}_{ProjectName}_Dataload` (for example `UAT_EAO_DW_Dataload`)
+- The job runs the SSIS packages in sequence (staging -> dimensions -> facts) and then processes SSAS
+- The SSIS orchestrator DTSX is triggered **inside the SQL Agent job**, not directly by the pipeline
+- `runDbaAgentJob.ps1` is the pipeline wrapper that correctly fails the task if the SQL Agent job fails
+- Job ownership should remain with the service account, not a personal login
+
 ---
-
-## 6. ELT Triggering from ADO Pipeline
-
-For triggering a data load as part of the pipeline (e.g., after deploying SSAS model to refresh data):
-
-### Option A: Trigger SQL Agent Job via T-SQL
-
-```powershell
-# scripts/Invoke-SqlAgentJob.ps1
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $SqlServer,
-    [Parameter(Mandatory)] [string] $JobName,
-    [int] $TimeoutSeconds = 3600
-)
-
-$ErrorActionPreference = 'Stop'
-Import-Module SqlServer -ErrorAction Stop
-
-# Start the job
-Invoke-Sqlcmd -ServerInstance $SqlServer -Query "EXEC msdb.dbo.sp_start_job N'$JobName';"
-Write-Host "SQL Agent job '$JobName' started."
-
-# Poll until complete
-$elapsed = 0
-do {
-    Start-Sleep -Seconds 15
-    $elapsed += 15
-    $status = Invoke-Sqlcmd -ServerInstance $SqlServer -Query @"
-SELECT j.name, ja.run_requested_date,
-       CASE ja.last_executed_step_id
-           WHEN NULL THEN 'Running'
-           ELSE 'Complete'
-       END AS Status,
-       jh.run_status  -- 1=Succeeded, 0=Failed, 3=Cancelled
-FROM   msdb.dbo.sysjobs j
-JOIN   msdb.dbo.sysjobactivity ja ON j.job_id = ja.job_id
-LEFT   JOIN msdb.dbo.sysjobhistory jh
-    ON j.job_id = jh.job_id AND jh.step_id = 0
-WHERE  j.name = N'$JobName'
-  AND  ja.session_id = (SELECT MAX(session_id) FROM msdb.dbo.sysjobactivity);
-"@
-    Write-Host "Job status: $($status.run_status) (elapsed: ${elapsed}s)"
-} while ($status.run_status -notin @(1, 0, 3) -and $elapsed -lt $TimeoutSeconds)
-
-if ($status.run_status -ne 1) {
-    Write-Error "SQL Agent job '$JobName' failed or timed out (status: $($status.run_status))"
-    exit 1
-}
-
-Write-Host "SQL Agent job '$JobName' completed successfully."
-exit 0
-```
-
-### Option B: Execute SSIS Package Directly
-
-For pipeline-triggered refreshes outside the SQL Agent schedule:
-
-```powershell
-# scripts/Invoke-SsisExecution.ps1
-[CmdletBinding()]
-param(
-    [Parameter(Mandatory)] [string] $SqlServer,
-    [Parameter(Mandatory)] [string] $FolderName,
-    [Parameter(Mandatory)] [string] $ProjectName,
-    [Parameter(Mandatory)] [string] $PackageName,
-    [Parameter(Mandatory)] [string] $EnvironmentName,
-    [datetime] $LoadWindowStart,
-    [datetime] $LoadWindowEnd
-)
-
-$ErrorActionPreference = 'Stop'
-Import-Module SqlServer -ErrorAction Stop
-
-$sql = @"
-DECLARE @exec_id BIGINT;
-EXEC SSISDB.catalog.create_execution
-    @package_name  = N'$PackageName',
-    @project_name  = N'$ProjectName',
-    @folder_name   = N'$FolderName',
-    @reference_id  = (
-        SELECT reference_id FROM SSISDB.catalog.environment_references er
-        JOIN SSISDB.catalog.projects p ON er.project_id = p.project_id
-        JOIN SSISDB.catalog.folders f  ON p.folder_id   = f.folder_id
-        WHERE f.name = N'$FolderName' AND p.name = N'$ProjectName'
-          AND er.environment_name = N'$EnvironmentName'),
-    @execution_id  = @exec_id OUTPUT;
-SELECT @exec_id AS ExecutionId;
-"@
-
-$result = Invoke-Sqlcmd -ServerInstance $SqlServer -Query $sql
-$execId = $result.ExecutionId
-
-Invoke-Sqlcmd -ServerInstance $SqlServer -Query "EXEC SSISDB.catalog.start_execution @execution_id = $execId;"
-
-# Poll
-$done = $false
-do {
-    Start-Sleep -Seconds 10
-    $status = Invoke-Sqlcmd -ServerInstance $SqlServer -Query @"
-SELECT [status] FROM SSISDB.catalog.executions WHERE execution_id = $execId;
-"@
-    $done = $status.status -in @(4, 7, 9)
-} while (-not $done)
-
-if ($status.status -ne 4) {
-    Write-Error "SSIS execution $execId failed (status: $($status.status)). Check SSISDB."
-    exit 1
-}
-
-Write-Host "SSIS execution completed successfully (id: $execId)."
-exit 0
-```
-
----
-
 ## 7. PowerShell Script Standards for ADO Pipelines
 
 All pipeline scripts must follow these conventions:
@@ -962,60 +615,158 @@ catch {
 
 ---
 
-## 8. Repository Structure for Automated DW Projects
-
-```
-YourDWProject/
-├── Database/                       # SSDT SQL Server project (.sqlproj)
-│   ├── dbo/
-│   │   ├── Tables/
-│   │   ├── Views/
-│   │   └── StoredProcedures/
-│   ├── staging/
-│   │   └── Tables/
-│   └── Scripts/
-│       └── Post-Deployment/
-│           └── ExtendedProperties/  # sp_addextendedproperty upsert scripts
-├── SSIS/                           # SSIS solution (.sln + .dtproj)
-│   └── DW_ELT/
-│       ├── Master_Orchestrator.dtsx
-│       ├── Load_Staging.dtsx
-│       ├── Load_Dimensions.dtsx
-│       └── Load_Facts.dtsx
-├── SSAS/                           # Analysis Services model
-│   └── DW_Model/
-│       └── Model.bim               # or TMDL folder
-├── Reports/                        # Power BI reports
-│   └── *.pbix
-├── scripts/                        # ADO pipeline PowerShell scripts
-│   ├── Deploy-DACPAC.ps1
-│   ├── Deploy-SsisProject.ps1
-│   ├── Deploy-SsasModel.ps1
-│   ├── Process-SsasDatabase.ps1
-│   ├── Deploy-PbixReports.ps1
-│   ├── Invoke-SqlAgentJob.ps1
-│   └── Invoke-SsisExecution.ps1
-└── azure-pipelines.yml             # Optional — only if using YAML pipelines
-```
-
+## 8. Repository Structure for Automated DW Projects
+
+```
+YourDWProject/
+|-- DW/                                # SSDT solution and database project
+|   |-- {ProjectName}.sln
+|   |-- {ProjectName}.sqlproj
+|   |-- Dimension/
+|   |-- Fact/
+|   |-- Staging/
+|   |-- Internal/
+|   |-- SSAS/
+|   `-- Scripts/
+|       `-- Post-Deployment/
+|-- SSIS/
+|   `-- {ProjectName}_SSIS/            # SSIS solution folder built by devenv.com
+|       |-- {ProjectName}_SSIS.sln
+|       |-- *.dtproj
+|       |-- *.dtsx
+|       `-- ssis_catalog_configuration.json
+|-- SSAS/
+|   `-- {ModelName}/                   # TMDL folder (Tabular Editor "Save as folder")
+|       |-- database.tmdl
+|       |-- model.tmdl
+|       |-- tables/
+|       |-- relationships/
+|       `-- roles/
+`-- Reports/
+    `-- *.pbix
+```
+
+> **Classic pipeline definitions are stored in the ADO Server UI, not in this repo.**
+> Shared deployment scripts run from the agent path `E:\Tools\PowerShellScripts\` and should be
+> referenced through the shared `Tools` variable group wherever a `$(tool_*)` variable is available.
+
 ---
-
-## 9. Checklist — Is This Deployable via Pipeline?
-
-Use this when generating or reviewing any solution component:
-
-| Item | Required Behavior | ✓ |
-|---|---|---|
-| No hardcoded server names | All server references via parameters/variables | |
-| No hardcoded credentials | Secrets come from ADO variable group (marked secret) | |
-| Idempotent scripts | Re-running = update, not duplicate or error | |
-| Exit codes set | `exit 0` / `exit 1` for ADO task success/failure detection | |
-| SSIS project deployment model | `.ispac` deployment; connection strings in SSISDB env | |
-| SSAS deployed via CLI | Tabular Editor CLI (`te.exe`), not VS GUI deploy | |
-| SSAS connection parameterized | Data source connection uses environment-specific variables | |
-| PBIX data source updated | Post-upload REST call updates SSAS connection per environment | |
-| DACPAC safe defaults | `BlockOnPossibleDataLoss=true`, `DropObjectsNotInSource=false` | |
-| Extended properties in SSDT | Post-deploy scripts, not ad-hoc SSMS execution | |
-| SQL Agent job is the only SSIS trigger | Single step → `Master_Orchestrator.dtsx` only | |
-| Pipeline stages ordered | DB → SSIS → SSAS → PBIX — later stages `dependsOn` earlier | |
-| No manual approval gates (Dev/Test) | Automated, straight-through for lower environments | |
+## 9. Checklist - Is This Deployable via Pipeline?
+
+Use this when generating or reviewing any solution component:
+
+| Item | Required Behavior | Y |
+|---|---|---|
+| No hardcoded server names | All server references via parameters/variables | |
+| No hardcoded credentials | Secrets come from ADO variable group (marked secret) | |
+| Idempotent scripts | Re-running = update, not duplicate or error | |
+| Exit codes set | `exit 0` / `exit 1` for ADO task success/failure detection | |
+| SSIS packages committed | `.dtsx` files committed to git; deployed from the built `.ispac` artifact | |
+| SSIS deployed via marketplace task | Use the SSIS Deploy task, then Replace Tokens, then Configure SSIS Catalog | |
+| SSAS deployed via TE CLI | Deploy `Model.bim` artifact built from TMDL in the build pipeline | |
+| SSAS connection parameterized | `SetConnectionStringFromEnv.cs` reads environment-specific ADO variables | |
+| PBIX connection updated | `PBIRS-deployPbixReports.ps1` updates SSAS connection per environment | |
+| DACPAC safe defaults | Publish with the real `sqlpackage.exe` task and integrated security connection string | |
+| Extended properties in SSDT | Post-deploy scripts, not ad-hoc SSMS execution | |
+| Single SQL Agent job orchestrates runtime | `{ENV}_{Project}_Dataload` triggers both SSIS ELT **and** SSAS processing in sequence | |
+| Pipeline stages ordered | DB schema -> SSIS deploy -> SSAS deploy -> ELT+SSAS process -> PBIX reports | |
+| Shared scripts used | Reference agent scripts from `E:\Tools\PowerShellScripts\` via `$(tool_*)` variables where available | |
+| dbatools installed on agent | Required by: `runsqlfile`, `runDbaAgentJob`, `backupdatabase`, `createSqlLogin` | |
+| ReportingServicesTools installed | Required by: `PBIRS-deployPbixReports`, `PBIRS-deployPaginatedReports` | |
+
+---
+## 10. Shared PowerShell Script Library
+
+Agent path:  `E:\Tools\PowerShellScripts\`
+Dev source:  `C:\Projects\ISBDevOps\TFS\PowerShellScripts\`
+ADO reference: via variable group **Tools** -> `$(tool_*)` variables
+
+Classic pipelines should call the shared agent copies, not repo-local duplicates.
+
+### DW Deployment Scripts
+
+| Script | Purpose | Referenced as |
+|---|---|---|
+| `runsqlfile.ps1` | Run a `.sql` file against a target database | `$(tool_run_sql_file)` |
+| `runDbaAgentJob.ps1` | Start a SQL Agent job and wait for completion | `$(tool_runDbaAgentJob)` |
+| `createSqlLogin.ps1` | Create/repair the `dw` SQL login used by the environment | `$(tool_create_sql_login)` |
+| `backupdatabase.ps1` | Backup a database before refresh/deployment workflows | `$(tool_db_backup)` |
+| `copyAndRefresh.ps1` | Copy and restore a database backup into another environment | `$(tool_copyAndRestore)` |
+| `archivedirectory.ps1` | Archive directories on the agent or shared storage | `$(tool_archive_directory)` |
+
+### PBIRS Deployment Scripts
+
+| Script | Purpose | Referenced as |
+|---|---|---|
+| `PBIRS-deployPbixReports.ps1` | Deploy `.pbix` files and update SSAS live-connection settings | `$(tool_PBIRS-deployPbixReports)` |
+| `PBIRS-deployPaginatedReports.ps1` | Deploy `.rdl`/`.rsd`/`.rds` content to PBIRS | shared agent path / optional variable |
+| `PBIRS-updateConnection.ps1` | Update report connection settings without re-uploading the file | shared agent path / optional variable |
+
+### Module Installation (Run on Build/Release Agent)
+
+```powershell
+# Run once on the build/release agent as Administrator
+Install-Module dbatools               -Scope AllUsers -Force
+Install-Module ReportingServicesTools -Scope AllUsers -Force
+```
+
+### Common ADO Classic Pipeline Task Pattern
+
+There are **two** common task patterns in the production pipelines:
+
+**1. PowerShell task (`e213ff0f`)**
+
+```
+Task Type:      PowerShell
+Type:           File Path
+File Path:      $(tool_run_sql_file)
+Arguments:      -sqlinstance "$(db_server)\$(db)"
+                -dbname "$(db_catalog)"
+                -file "$(artifact_dir)\DW\SQL\loadStaging.sql"
+```
+
+**2. Command Line task (`d9bafed4`)**
+
+```
+Task Type:      Command Line
+Filename:       $(sql_package_2019)
+Arguments:      /action:Publish /sourceFile:"$(artifact_dir)\DW\Release\{ProjectName}.dacpac" /targetconnectionstring:"Data Source=$(db_server)\$(db);Initial Catalog=$(dw_db_catalog);Integrated Security=True;Connection Timeout=150;Persist Security Info=False;"
+```
+
+> **Secret variables** use the same `$(VariableName)` syntax. ADO masks their values in logs.
+
+---
+
+## 11. TabularEditor Tools Package
+
+The TabularEditor toolset is managed outside individual DW repos and deployed onto the agent.
+
+- **Agent path**: `E:\Tools\TabularEditor\`
+- **Dev source**: `C:\Projects\ISBDevOps\TabularEditor\`
+
+**Package structure**
+
+```
+TabularEditor/
+|-- Portable/
+|   `-- TabularEditor.exe
+|-- Rules/
+|   `-- BPARules.json
+`-- Scripts/
+    |-- SetConnectionStringFromEnv.cs
+    |-- SetADConnectionStringFromEnv.cs
+    `-- ClearConnectionString.cs
+```
+
+**What each component is used for**
+
+| Component | Purpose | Used in |
+|---|---|---|
+| `Portable\TabularEditor.exe` | Portable executable used by ADO Command Line tasks | Build steps 8-10 and Release Phase 3 |
+| `Rules\BPARules.json` | Standard Best Practices Analyzer rules loaded by the `-A` flag | Build step 8 |
+| `Scripts\ClearConnectionString.cs` | Clears connection strings before validation deployment | Build step 9 |
+| `Scripts\SetConnectionStringFromEnv.cs` | Applies `{DataSourceName}ConnectionString` env vars before schema check/deploy | Release Phase 3 |
+| `Scripts\SetADConnectionStringFromEnv.cs` | Alternative script for AD impersonation scenarios | Available but not used in current pipelines |
+
+`BPARules.json` is managed as part of the shared TabularEditor package so every project uses the
+same analyzer rules when the build pipeline runs the Best Practices Analyzer.

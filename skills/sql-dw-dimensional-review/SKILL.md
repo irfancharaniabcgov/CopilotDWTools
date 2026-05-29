@@ -99,9 +99,9 @@ Activate when the user asks to:
 1. Classify the pipeline architecture against the 4-package pattern in `elt-patterns.md`
 2. Check source SPs: parameterized `@StartDate`/`@EndDate`, `NOLOCK`, no transforms
 3. Check SSIS data flows: raw extract only (no derived columns, lookups, or expressions)
-4. Check staging tables: all nullable, no FKs, `staging.stg_<Prefix>_<TableName>` naming
-5. Check transform SPs: upsert/MERGE pattern for dims, append+aggregate for facts
-6. Check ELT control tables: `ELT_ControlTable` high-water mark, `ELT_BatchLog` row
+4. Check staging tables: `Staging.{EntityName}` naming, identity `{EntityName}Key`, `_Source...` natural keys, no presentation-layer FKs
+5. Check transform/load SPs: `Dimension.Load{EntityName}` for dimensions, `Fact.Load{EntityName}` for facts, `Staging.Load{EntityName}` for staging preparation
+6. Check ELT control tables: `Internal.Lineage`, `Internal.IncrementalLoads`, `Internal.LastUpdatedSource`, and `Internal.ProcedureError`
 7. Check package structure: all child packages run tasks in parallel; Master_Orchestrator runs children in sequence
 8. Produce findings report with references to `elt-patterns.md` sections
 
@@ -116,6 +116,110 @@ Activate when the user asks to:
 6. Check SSAS deployment uses Tabular Editor CLI (not VS GUI)
 7. Check PBIX upload includes data source update post-upload
 8. Produce findings report with references to `devops-deployment-patterns.md` sections
+
+### Mode H: DW Schema Scaffold
+**Trigger**: Design spec confirmed (from dw-report-designer) OR user provides table requirements directly
+**Input**: Confirmed grain, list of dimensions and facts, SCD types, sensitivity labels
+**Process**:
+1. Generate SSDT-compatible SQL files for each table:
+   - `Dimension/Tables/{Name}.sql` — with `{EntityName}Key`, `_Source...` natural keys, and SCD columns where applicable
+   - `Fact/Tables/{Name}.sql` — with `{Role}DateKey`, dimension `{EntityName}Key` FKs, measures, and schema-qualified references
+   - `Staging/Tables/{Name}.sql` — with `{EntityName}Key IDENTITY`, business attributes, `_Source...` natural keys, and `LineageKey`
+   - `Internal/Tables/` and `Internal/Stored Procedures/` — lineage/control objects when a new source is being added
+2. Generate post-deploy script for `sp_addextendedproperty` (call Mode C for each object)
+3. Generate `ADD SENSITIVITY CLASSIFICATION` statements for Protected columns (call Mode C from `data-classification.md`)
+4. Output as ready-to-add SSDT SQL files using the org schemas (`Dimension`, `Fact`, `Staging`, `Internal`, `SSAS`)
+**Conventions**: Follow naming from `elt-patterns.md` and `kimball-patterns.md`
+
+### Mode I: SSAS Tabular Model Scaffold
+**Trigger**: DW schema confirmed (Mode H output or existing DW tables)
+**Input**: DW table list, measures list, relationship map from spec
+**Process**:
+1. Generate TMDL files for each table:
+   - Table definition (columns, data types, source query or view)
+   - Import from `SSAS` schema views (views hide DW implementation details from the SSAS model)
+   - Hidden `{EntityName}Key` columns; visible `_Source...` and attribute columns
+2. Generate relationship definitions (always single-direction unless a bidirectional relationship is explicitly justified)
+3. Generate display folder structure (group measures by business area)
+4. Generate base measures with descriptions (SQLBI pattern stubs)
+5. Generate `[Last Processed {TableName}]` as a hidden column on each table (required for the Debug tab)
+6. Generate a `[_Debug]` table for the Data Freshness tab
+7. Output TMDL folder structure compatible with Tabular Editor 2 "Save as folder" (`TabularEditor.exe`)
+**Reference**: `ssas-tabular-bp.md` for all naming and structure conventions
+
+### Mode J: Source Stored Procedure Generation
+**Trigger**: New source tables identified in the spec
+**Input**: Source table DDL or live connection, confirmed columns to extract
+**Process**:
+1. Generate one DW load SP per staging entity: `[Staging].[Load{EntityName}]`
+2. SP signature follows the org load pattern and records `@LineageKey` in `[Internal].[Lineage]`
+3. SP body loads into `[Staging].[{EntityName}]`, preserving source columns as `_Source...` keys and applying the org staging-table structure
+4. Keep source extraction raw — no business transformations before the DW load pattern executes
+5. Add `SET NOCOUNT ON`, `SET XACT_ABORT ON`, and org-standard `TRY/CATCH` handling with `Internal.RethrowError`
+6. For Salesforce sources: note that the KingswaySoft SSIS connector is required (no native SSIS connector exists for Salesforce); the SP pattern does not apply — document as an SSIS data flow instead
+7. Output as T-SQL scripts deployable to the DW database using the org schemas
+**Reference**: `elt-patterns.md` for the incremental load pattern and SP conventions
+
+### Mode K: SSIS Catalog Configuration
+**Trigger**: New SSIS project being created, or adding new packages to an existing project
+**Input**: Source servers, target DW server, SSIS project name, environment name
+**Process**:
+1. Generate `ssis_catalog_configuration.json` with environment variable entries:
+   - `ssis_param_LoadType` = `I` (incremental)
+   - `ssis_param_SourceDB`, `ssis_param_SourceServer`
+   - `ssis_param_TargetDB`, `ssis_param_TargetServer`
+   - Token placeholders `#{variable_name}#` for the ADO Replace Tokens task
+2. Document the 3-package parallel structure: Load Staging → Load Dimensions → Load Facts
+3. Document the Master_Orchestrator package calling child packages in sequence
+4. If Salesforce source: note KingswaySoft plugin requirement; `UsesDispositions='true'`; remove `System.` prefix from `Int32` data type in BIML
+5. Output as JSON configuration plus pipeline task configuration documentation
+**Reference**: `elt-patterns.md` for SSIS project structure and environment variable conventions
+
+### Mode L: DAX Measure Generation
+**Trigger**: SSAS model exists or is scaffolded (Mode I); measures list confirmed in spec
+**Input**: List of measure names, measure types (additive / semi-additive / non-additive), time intelligence requirements
+**Process**:
+1. For each measure: identify the appropriate SQLBI pattern from `sqlbi-dax-patterns.md`
+2. Generate the DAX expression using the correct pattern
+3. Apply standard measure quality rules:
+   - Use `DIVIDE()` instead of `/`
+   - Use `VAR` for complex multi-step expressions
+   - Set the `Description` property
+   - Set `FormatString`
+   - Wrap in `IF(HASONEVALUE(...), ..., BLANK())` for non-additive measures where appropriate
+4. Group measures in display folders by business area
+5. Generate both the base measure and common time intelligence variants (YTD, Prior Year, YoY Variance)
+6. Output as TMDL measure definitions or as a Tabular Editor 2 (`TabularEditor.exe`) script to add measures to an existing model
+
+### Mode M: ADO Classic Pipeline Config Generation
+**Trigger**: New DW project being set up OR adding new deployment phases to an existing pipeline
+**Input**: Project name, SSIS project name, SSAS model name, environment list (UAT / PROD), server names
+**Process**:
+1. Generate the 5-phase release pipeline task configuration in documented format (Classic pipeline task format — not YAML):
+   - **Phase 1 — Deploy DW DB**: createSqlLogin → sqlpackage (DACPAC) → runsqlfile for source SPs
+   - **Phase 2 — Deploy SSIS**: SSIS marketplace task → Replace Tokens → Configure SSIS Catalog
+   - **Phase 3 — Deploy SSAS**: Schema Check → Deploy (both as Command Line tasks using `TabularEditor.exe`)
+   - **Phase 4 — Run ELT and Process SSAS**: single runDbaAgentJob call
+   - **Phase 5 — Deploy Reports**: PBIRS-deployPbixReports
+2. Generate the variable group entries needed (Tools group variables plus environment-specific variables)
+3. Generate the build pipeline task sequence (13 steps)
+4. Note: Tabular Editor 2 (`TabularEditor.exe`) is free and already deployed to `E:\Tools\TabularEditor\` — always use the free Tabular Editor 2 executable; the paid Tabular Editor 3 is not available in this environment
+5. Output as documented pipeline configuration matching the format in `devops-deployment-patterns.md`
+**Reference**: `devops-deployment-patterns.md` for all pipeline configuration patterns and PowerShell standards
+
+### Mode N: Full DW Scaffold (Orchestrated Build)
+**Trigger**: Signed-off spec from dw-report-designer OR user requests end-to-end generation
+**Input**: Complete design specification document
+**Process**: Execute Modes H, I, J, K, L, M in dependency order:
+1. **Mode H + Mode J in parallel** — DW schema SQL files and source SPs are independent of each other
+2. **Mode I after Mode H** — SSAS TMDL scaffold needs DW tables defined first
+3. **Mode L after Mode I** — DAX measures need the SSAS model structure
+4. **Mode K after Mode H** — SSIS catalog configuration needs the DW server and database names
+5. **Mode M last** — ADO pipeline configuration needs all artifact names from all previous modes
+
+After all modes complete, produce a **build summary** listing:
+- Every generated file with its target path
+- Next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages to the project", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT")
 
 ## Output Standards
 
