@@ -128,12 +128,167 @@ FROM CHANGETABLE(CHANGES dbo.Customer, @last_sync_version) AS ct
 JOIN dbo.Customer c ON ct.CustomerID = c.CustomerID;
 
 -- Option D: CDC (Change Data Capture) — captures all changes including deletes
--- See SQL Server CDC documentation for setup
+-- See Layer 1c below for full CDC patterns
 ```
 
 ---
 
-## Layer 1b: External Source Systems — Salesforce via KingswaySoft
+## Layer 1c: CDC (Change Data Capture) Source Pattern
+
+Use CDC when a source table has **no reliable ModifiedDate**, or when you need to capture **deletes**
+(which the date-window SP pattern cannot detect). CDC captures every INSERT/UPDATE/DELETE from the
+SQL Server transaction log without touching the source application.
+
+### Enabling CDC
+
+```sql
+-- Step 1: Enable CDC on the source database (requires sysadmin)
+USE SourceDB;
+EXEC sys.sp_cdc_enable_db;
+
+-- Step 2: Enable CDC on each table you want to track
+EXEC sys.sp_cdc_enable_table
+    @source_schema       = 'dbo',
+    @source_name         = 'SalesOrder',
+    @role_name           = NULL,        -- NULL = sysadmin/db_owner access only
+    @supports_net_changes = 1;          -- enables fn_cdc_get_net_changes_* function
+
+-- Verify
+SELECT name, is_cdc_enabled FROM sys.databases WHERE name = 'SourceDB';
+SELECT source_schema, source_name, capture_instance FROM cdc.change_tables;
+```
+
+**Prerequisites:**
+- Source database recovery model must be **FULL** or **BULK_LOGGED**
+- SQL Agent must be running (CDC uses capture and cleanup Agent jobs: `cdc.<db>_capture` / `cdc.<db>_cleanup`)
+- Default cleanup retention is **3 days** — increase if ELT can fail for several days:
+  `EXEC sys.sp_cdc_change_job @job_type='cleanup', @retention=7200;` (minutes; 7200 = 5 days)
+- Do not use CDC on tables with frequent DDL changes (column adds/renames require re-enabling)
+
+### CDC Change Table Structure
+
+CDC creates a shadow table `cdc.dbo_<TableName>_CT` with these metadata columns:
+
+| Column | Meaning |
+|---|---|
+| `__$start_lsn` | Log Sequence Number at change time |
+| `__$seqval` | Row sequence within transaction |
+| `__$operation` | 1=Delete, 2=Insert, 3=Before-update, 4=After-update |
+| `__$update_mask` | Bitmask of changed columns |
+
+### LSN-Based Load Window (replaces date-based window for CDC sources)
+
+```sql
+-- Map last-loaded timestamp → starting LSN
+DECLARE @FromLSN BINARY(10) = sys.fn_cdc_map_time_to_lsn(
+    'smallest greater than or equal',
+    @LastLoadTime   -- DATETIME from ELT_ControlTable.LastSuccessfulLoadEnd
+);
+DECLARE @ToLSN BINARY(10) = sys.fn_cdc_get_max_lsn();
+
+-- Get all net changes in window (final state of each row)
+SELECT *
+FROM cdc.fn_cdc_get_net_changes_dbo_SalesOrder(@FromLSN, @ToLSN, 'all');
+-- __$operation values in net changes: 1=Delete, 2=Insert, 5=Update (merged)
+
+-- Get all individual changes in window (audit trail)
+SELECT *
+FROM cdc.fn_cdc_get_all_changes_dbo_SalesOrder(@FromLSN, @ToLSN, 'all')
+ORDER BY __$start_lsn, __$seqval;
+```
+
+### Transform SP Pattern for CDC Sources
+
+For CDC sources the transform SP handles deletes explicitly — the standard date-window SP pattern cannot:
+
+```sql
+CREATE PROCEDURE dbo.usp_Transform_Fact_SalesOrder_CDC
+    @FromLSN    BINARY(10),
+    @ToLSN      BINARY(10),
+    @BatchID    INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    BEGIN TRANSACTION;
+    BEGIN TRY
+        -- 1. Process DELETEs (soft-delete or hard-delete depending on DW policy)
+        UPDATE f
+        SET f.IsDeleted = 1, f.ELT_BatchID = @BatchID
+        FROM dbo.Fact_SalesOrder f
+        WHERE f.SalesOrderID IN (
+            SELECT SalesOrderID
+            FROM SourceDB.cdc.fn_cdc_get_net_changes_dbo_SalesOrder(@FromLSN, @ToLSN, 'all')
+            WHERE __$operation = 1  -- delete
+        );
+
+        -- 2. MERGE INSERTs and UPDATEs (net change = final state, __$operation 2 or 5)
+        MERGE dbo.Fact_SalesOrder AS tgt
+        USING (
+            SELECT
+                c.SalesOrderID,
+                d.DateKey    AS OrderDateKey,
+                cust.CustomerKey,
+                c.Quantity,
+                c.UnitPrice,
+                c.Quantity * c.UnitPrice AS SalesAmount
+            FROM SourceDB.cdc.fn_cdc_get_net_changes_dbo_SalesOrder(@FromLSN, @ToLSN, 'all') c
+            JOIN dbo.Dim_Date     d    ON CAST(c.OrderDate AS DATE) = d.FullDate
+            JOIN dbo.Dim_Customer cust ON c.CustomerID = cust.SourceCustomerID
+                                      AND cust.IsCurrent = 1
+            WHERE c.__$operation IN (2, 5)  -- Insert or Update
+        ) AS src ON tgt.SalesOrderID = src.SalesOrderID
+
+        WHEN MATCHED THEN UPDATE SET
+            tgt.OrderDateKey   = src.OrderDateKey,
+            tgt.Quantity       = src.Quantity,
+            tgt.UnitPrice      = src.UnitPrice,
+            tgt.SalesAmount    = src.SalesAmount,
+            tgt.ELT_BatchID    = @BatchID
+
+        WHEN NOT MATCHED BY TARGET THEN INSERT
+            (SalesOrderID, OrderDateKey, CustomerKey, Quantity, UnitPrice, SalesAmount, ELT_BatchID)
+        VALUES
+            (src.SalesOrderID, src.OrderDateKey, src.CustomerKey,
+             src.Quantity, src.UnitPrice, src.SalesAmount, @BatchID);
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH;
+END;
+GO
+```
+
+### ELT_ControlTable for CDC Sources
+
+CDC sources store the last processed LSN (as a converted datetime) rather than a plain datetime:
+
+```sql
+-- For CDC sources, LastSuccessfulLoadEnd stores the high-water LSN as a datetime
+-- Use sys.fn_cdc_map_time_to_lsn() to convert back to LSN for the next run
+INSERT INTO dbo.ELT_ControlTable (SourceSystem, SourceTable, ChangeDetectionColumn, LastSuccessfulLoadEnd)
+VALUES ('ERP_CDC', 'SalesOrder', 'CDC_LSN', '2000-01-01');
+
+-- After successful load, advance watermark to time corresponding to @ToLSN
+UPDATE dbo.ELT_ControlTable
+SET LastSuccessfulLoadEnd = sys.fn_cdc_map_lsn_to_time(@ToLSN)
+WHERE SourceSystem = 'ERP_CDC' AND SourceTable = 'SalesOrder';
+```
+
+### CDC vs Date-Window: When to Use Each
+
+| Factor | Date-Window SP | CDC |
+|---|---|---|
+| Source has ModifiedDate | ✅ Use this | Overkill |
+| Need to capture deletes | ❌ Cannot detect | ✅ Required |
+| Source has no change date | ❌ Must full-reload | ✅ Preferred |
+| Source is not SQL Server | ✅ Works cross-platform | ❌ SQL Server only |
+| Source recovery model is SIMPLE | ✅ Works | ❌ Requires FULL/BULK_LOGGED |
+| Very high-volume tables | ✅ Low overhead | Monitor log growth |
 
 SQL Server Integration Services has **no native Salesforce connector**. The recommended solution
 for Salesforce extraction in an on-premises SSIS + SQL Server DW environment is the

@@ -37,6 +37,7 @@ Activate when the user asks to:
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
 | `references/elt-patterns.md` | ELT pipeline review, SSIS 4-package structure, source SP patterns, staging/transform design |
 | `references/devops-deployment-patterns.md` | ADO Server pipeline YAML, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
+| `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 
 ## Operating Modes
 
