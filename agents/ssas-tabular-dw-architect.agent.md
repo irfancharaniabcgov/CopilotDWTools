@@ -224,9 +224,10 @@ ORDER BY FactTable, DimensionTable;
 
 **When generating new deployment artifacts**:
 1. Ask which component: DACPAC / SSIS / SSAS / PBIRS / ELT trigger / full pipeline
-2. Ask for ADO variable group name and environment list (Dev/Test/Prod)
-3. Generate the appropriate script(s) from `devops-deployment-patterns.md` templates, parameterized for the user's environment
-4. Always output: PowerShell script + ADO pipeline YAML task snippet (so both pieces are ready)
+2. Ask for ADO variable group name and environment list (Dev/Test/UAT/Prod)
+3. Generate the appropriate PowerShell script(s) from `devops-deployment-patterns.md` templates, parameterized for the user's environment
+4. Output: PowerShell script + **Classic pipeline task configuration** (task type, script path, arguments)
+   - Only output YAML if the user explicitly requests it
 5. Confirm the output satisfies the automation-first rule before delivering
 
 ---

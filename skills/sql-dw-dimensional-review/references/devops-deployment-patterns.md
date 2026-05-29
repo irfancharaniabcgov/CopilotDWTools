@@ -23,14 +23,14 @@ pipeline step with no manual GUI interaction.
 ```
 On-Premises Azure DevOps Server
     │
-    ├── Self-hosted Build Agent (Windows Server)
+    ├── Self-hosted Build/Release Agent (Windows Server)
     │       ├── Visual Studio Build Tools (MSBuild, SqlPackage.exe)
     │       ├── SQL Server Integration Services (ISDeploymentWizard.exe)
     │       ├── Tabular Editor CLI (te.exe or te3.exe)
     │       ├── Analysis Services PowerShell module (SqlServer)
     │       └── PowerShell 5.1+ / PowerShell Core
     │
-    ├── Pipeline Stages (run in sequence)
+    ├── Classic Pipeline Stages (run in sequence)
     │       1. Build          — compile DACPAC, .ispac, validate model files
     │       2. Deploy DB      — SqlPackage.exe publishes DACPAC to SQL Server
     │       3. Deploy SSIS    — .ispac deployed to SSISDB; environments configured
@@ -39,19 +39,133 @@ On-Premises Azure DevOps Server
     │       6. Process SSAS   — Full/incremental process via XMLA or PowerShell
     │       7. Deploy PBIX    — PBIX files uploaded via PBIRS REST API
     │
-    └── ADO Variable Groups
-            DW-Dev, DW-Test, DW-Prod
+    └── ADO Variable Groups (Library)
+            DW-Dev, DW-Test, DW-UAT, DW-Prod
             (SQL server, SSAS server, PBIRS URL, credentials)
+            Linked to each Release pipeline stage
 ```
 
 ---
 
-## 1. ADO Pipeline Structure
+## 1. ADO Classic Pipeline Structure (Primary)
 
-### Pipeline YAML Template (on-prem agent)
+Azure DevOps Server uses **Classic Pipelines** — the visual task editor — as the primary
+deployment mechanism. Classic pipelines are configured through the ADO Server UI, not stored
+as YAML files in the repository.
+
+> **YAML pipelines are optional.** All PowerShell scripts in Sections 2–9 work identically
+> whether called from a Classic pipeline task or a YAML pipeline step. The scripts are what
+> matter; the pipeline type is a configuration choice.
+
+### Classic Release Pipeline Layout
+
+Configure a **Release Pipeline** in ADO Server with one stage per environment:
+
+```
+Release Pipeline: DW_Deploy
+│
+├── Stage: Deploy to DEV     (auto-triggers on Build completion)
+│   ├── Pre-deployment conditions: none (auto-deploy)
+│   └── Tasks:
+│       1. PowerShell: Deploy-DACPAC.ps1
+│       2. PowerShell: Deploy-SsisProject.ps1
+│       3. PowerShell: Deploy-SsasModel.ps1
+│       4. PowerShell: Process-SsasDatabase.ps1
+│       5. PowerShell: Deploy-PbixReports.ps1
+│
+├── Stage: Deploy to TEST    (manual trigger / approval gate)
+│   ├── Pre-deployment conditions: 1 approver required
+│   └── Tasks: (same 5 tasks, different variable group)
+│
+├── Stage: Deploy to UAT     (manual trigger / approval gate)
+│   ├── Pre-deployment conditions: 2 approvers required
+│   └── Tasks: (same 5 tasks, different variable group)
+│
+└── Stage: Deploy to PROD    (manual trigger / approval gate)
+    ├── Pre-deployment conditions: 2 approvers required
+    └── Tasks: (same 5 tasks, different variable group)
+```
+
+### Classic Build Pipeline Layout
+
+Configure a **Build Pipeline** in ADO Server to compile artifacts:
+
+```
+Build Pipeline: DW_Build
+│
+└── Agent Job: Build Artifacts
+    ├── Task: MSBuild — build SSDT DACPAC
+    │     Solution: Database\DW.sqlproj
+    │     MSBuild arguments: /p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\dacpac
+    │
+    ├── Task: MSBuild — build SSIS .ispac
+    │     Solution: SSIS\DW_ELT.sln
+    │     MSBuild arguments: /p:Configuration=Release /p:OutputPath=$(Build.ArtifactStagingDirectory)\ssis
+    │
+    └── Task: Publish Artifact — DWArtifacts
+          Path: $(Build.ArtifactStagingDirectory)
+```
+
+### Adding a PowerShell Task in Classic Pipeline
+
+Each deployment step is a **PowerShell** task configured as follows:
+
+```
+Task: PowerShell
+  Type:          File Path
+  Script Path:   $(System.DefaultWorkingDirectory)/DWArtifacts/scripts/Deploy-DACPAC.ps1
+  Arguments:     -SqlPackagePath "$(SqlPackagePath)"
+                 -DacpacPath "$(System.DefaultWorkingDirectory)/DWArtifacts/dacpac/DW.dacpac"
+                 -TargetServer "$(DW_SQL_SERVER)"
+                 -TargetDatabase "$(DW_DATABASE)"
+  ErrorActionPreference: Stop     (set in Advanced tab, or the script sets it itself)
+```
+
+> **All variable references** use `$(VariableName)` syntax in Classic pipelines.
+> Link a variable group to each stage via **Stage → Variables → Variable groups**.
+
+### Variable Group Setup
+
+Create one variable group per environment in **ADO Server → Library**:
+
+| Variable | Example (Dev) | Example (Prod) |
+|---|---|---|
+| `DW_SQL_SERVER` | `DEVDB01\DW` | `PRODDB01\DW` |
+| `DW_DATABASE` | `DW_Dev` | `DW_Prod` |
+| `SSAS_SERVER` | `DEVDB01\SSAS` | `PRODDB01\SSAS` |
+| `SSAS_DATABASE` | `DW_Model_Dev` | `DW_Model_Prod` |
+| `PBIRS_URL` | `http://devpbirs/reports` | `http://prodpbirs/reports` |
+| `PBIRS_FOLDER` | `/Reports/Dev` | `/Reports` |
+| `SSISDB_ENVIRONMENT` | `Dev` | `Prod` |
+
+Mark all credentials as **secret variables** (lock icon). Secret variables are never echoed in logs.
+
+Link groups: **Release Pipeline → Stage → Variables → Variable groups → Link variable group**.
+Each stage links its own group (DW-Dev, DW-Test, DW-UAT, DW-Prod).
+
+### Self-Hosted Agent Requirements
+
+The build/release agent must have these tools installed:
+
+| Tool | Used by |
+|---|---|
+| `SqlPackage.exe` | Deploy-DACPAC.ps1 |
+| `ISDeploymentWizard.exe` | Deploy-SsisProject.ps1 |
+| Tabular Editor CLI (`te3.exe`) | Deploy-SsasModel.ps1 |
+| PowerShell SqlServer module | Process-SsasDatabase.ps1 |
+| PowerShell 5.1+ | All scripts |
+
+---
+
+### Optional: YAML Pipeline Equivalent
+
+> Use YAML only if your team has moved to YAML-based pipelines or is using Azure DevOps Services.
+> The Classic pipeline above is the primary standard for this on-premises ADO Server environment.
+
+If YAML is preferred, the Classic pipeline above maps directly to:
 
 ```yaml
-# azure-pipelines.yml
+# azure-pipelines.yml — optional, not the primary standard
 trigger:
   branches:
     include:
@@ -108,8 +222,6 @@ stages:
                       -DacpacPath "$(Pipeline.Workspace)\DWArtifacts\dacpac\DW.dacpac"
                       -TargetServer "$(DW_SQL_SERVER)"
                       -TargetDatabase "$(DW_DATABASE)"
-                      -SqlUser "$(DW_SQL_USER)"
-                      -SqlPassword "$(DW_SQL_PASSWORD)"
 
   - stage: DeploySsis
     dependsOn: DeployDB
@@ -146,7 +258,7 @@ stages:
                     filePath: 'scripts/Deploy-SsasModel.ps1'
                     arguments: >
                       -TabularEditorPath "$(TabularEditorPath)"
-                      -BimPath "$(Pipeline.Workspace)\DWArtifacts\model\DW_Model.bim"
+                      -ModelPath "$(Pipeline.Workspace)\DWArtifacts\model"
                       -SsasServer "$(SSAS_SERVER)"
                       -DatabaseName "$(SSAS_DATABASE)"
 
@@ -169,27 +281,7 @@ stages:
                       -TargetFolder "$(PBIRS_FOLDER)"
                       -SsasServer "$(SSAS_SERVER)"
                       -SsasDatabase "$(SSAS_DATABASE)"
-                      -PbirsUser "$(PBIRS_USER)"
-                      -PbirsPassword "$(PBIRS_PASSWORD)"
 ```
-
-### ADO Variable Group Mapping
-
-Create one variable group per environment in ADO Server Library:
-
-| Variable | Example (Dev) | Example (Prod) |
-|---|---|---|
-| `DW_SQL_SERVER` | `DEVDB01\DW` | `PRODDB01\DW` |
-| `DW_DATABASE` | `DW_Dev` | `DW_Prod` |
-| `DW_SQL_USER` | `svc_dw_dev` | `svc_dw_prod` |
-| `DW_SQL_PASSWORD` | `***` (secret) | `***` (secret) |
-| `SSAS_SERVER` | `DEVDB01\SSAS` | `PRODDB01\SSAS` |
-| `SSAS_DATABASE` | `DW_Model_Dev` | `DW_Model_Prod` |
-| `PBIRS_URL` | `http://devpbirs/reports` | `http://prodpbirs/reports` |
-| `PBIRS_FOLDER` | `/Reports/Dev` | `/Reports` |
-| `PBIRS_USER` | `DOMAIN\svc_pbirs_dev` | `DOMAIN\svc_pbirs_prod` |
-| `PBIRS_PASSWORD` | `***` (secret) | `***` (secret) |
-| `SSISDB_ENVIRONMENT` | `Dev` | `Prod` |
 
 ---
 
@@ -903,7 +995,7 @@ YourDWProject/
 │   ├── Deploy-PbixReports.ps1
 │   ├── Invoke-SqlAgentJob.ps1
 │   └── Invoke-SsisExecution.ps1
-└── azure-pipelines.yml             # ADO pipeline definition
+└── azure-pipelines.yml             # Optional — only if using YAML pipelines
 ```
 
 ---

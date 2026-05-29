@@ -36,7 +36,7 @@ Activate when the user asks to:
 | `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts; InformationType + SensitivityLabel classification |
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
 | `references/elt-patterns.md` | ELT pipeline review, SSIS 4-package structure, source SP patterns, staging/transform design |
-| `references/devops-deployment-patterns.md` | ADO Server pipeline YAML, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
+| `references/devops-deployment-patterns.md` | ADO Server Classic pipeline structure, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
 | `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
@@ -106,7 +106,7 @@ Activate when the user asks to:
 8. Produce findings report with references to `elt-patterns.md` sections
 
 ### Mode G: DevOps Deployment Review
-**Input**: Pipeline YAML, PowerShell deployment scripts, SSIS project structure, or SSAS model deployment approach
+**Input**: Classic pipeline configuration, PowerShell deployment scripts, SSIS project structure, or SSAS model deployment approach
 **Process**:
 1. Run the deployment checklist from `devops-deployment-patterns.md` Section 9
 2. Identify hardcoded values, missing exit codes, non-idempotent patterns
@@ -123,7 +123,7 @@ Activate when the user asks to:
 - Always cite the specific Kimball pattern, SQLBI pattern, or checklist item for each finding
 - For extended properties output: produce complete, ready-to-run T-SQL using the upsert pattern
 - For bus matrix output: produce a markdown table with ✓ marks for confirmed relationships
-- For ELT output: generate parameterized T-SQL SPs and pipeline YAML steps, not GUI click instructions
+- For ELT output: generate parameterized T-SQL SPs and Classic pipeline PowerShell task configurations, not GUI click instructions (not YAML unless user requests it)
 - For deployment scripts: all PowerShell must follow the standards in `devops-deployment-patterns.md` Section 7 — `[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`
 - Ask clarifying questions before assuming the grain of a fact table — grain definition requires domain knowledge
 
