@@ -399,62 +399,110 @@ All PBIRS live connection reports should follow this page structure:
 ## 5. Data Freshness Infrastructure (DW + SSAS Side)
 
 The Debug tab requires infrastructure in both the DW database and the SSAS model.
+Two approaches exist; **Approach A (calculated column)** is used by the reference projects and is recommended.
 
-### Step 1: DW — Create the Data Freshness View
+---
 
-This view consolidates all three layers into a single result set for the SSAS model to import:
+### Approach A — Calculated Column `NOW()` (Recommended)
 
-```sql
--- DW database: report.vw_DataFreshness
--- Consolidates ELT source tracking, DW load tracking, and SSAS process tracking
-CREATE OR ALTER VIEW report.vw_DataFreshness AS
+Each SSAS table carries a hidden calculated column `[Last Processed]` with expression `NOW()`.
+Because DAX calculated columns are evaluated at **processing time**, `NOW()` captures the exact
+moment that table was last processed. No external logging table or pipeline step is required.
 
--- Layer 1: Source extracts (from ELT_ControlTable)
-SELECT
-    'Source'                            AS DataLayer,
-    SourceSystem                        AS SystemName,
-    SourceTable                         AS TableName,
-    LastSuccessfulLoadEnd               AS LastRefreshed,
-    1                                   AS SortOrder
-FROM dbo.ELT_ControlTable
-WHERE LastSuccessfulLoadEnd > '2000-01-01'
+#### Step 1: Add `[Last Processed]` to every SSAS data table
 
-UNION ALL
+In Tabular Editor, add a calculated column to each data table:
 
--- Layer 2: DW transform completions (from ELT_BatchLog — most recent successful run per table)
-SELECT
-    'DataWarehouse'                     AS DataLayer,
-    'DW'                                AS SystemName,
-    LoadedTable                         AS TableName,
-    MAX(BatchEndTime)                   AS LastRefreshed,
-    2                                   AS SortOrder
-FROM dbo.ELT_BatchLog
-WHERE BatchStatus = 'Success'
-  AND LoadedTable IS NOT NULL
-GROUP BY LoadedTable
-
-UNION ALL
-
--- Layer 3: SSAS model processing (from SSAS_ProcessLog — most recent successful process)
-SELECT
-    'TabularModel'                      AS DataLayer,
-    'SSAS'                              AS SystemName,
-    DatabaseName                        AS TableName,
-    ProcessedAt                         AS LastRefreshed,
-    3                                   AS SortOrder
-FROM dbo.SSAS_ProcessLog
-WHERE ProcessStatus = 'Success'
-  AND ProcessedAt = (
-    SELECT MAX(ProcessedAt) FROM dbo.SSAS_ProcessLog
-    WHERE ProcessStatus = 'Success'
-  );
-GO
+```json
+{
+  "type": "calculated",
+  "name": "Last Processed",
+  "dataType": "dateTime",
+  "description": "Shows when this SSAS table was last processed",
+  "isHidden": true,
+  "expression": "NOW()",
+  "formatString": "yyyy-MMM-dd h:mm AM/PM",
+  "displayFolder": "_Debug"
+}
 ```
 
-### Step 2: DW — Create the SSAS Process Log Table
+> **Why this works**: DAX calculated columns are computed during model processing.
+> `NOW()` captures the processing timestamp and is stored in the column for all rows.
+> When you query `MAX([Last Processed])`, you get when the table was last processed.
+
+**TE3 C# script — add `[Last Processed]` to all non-hidden tables that don't already have it:**
+
+```csharp
+foreach (var table in Model.Tables.Where(t => !t.IsHidden))
+{
+    if (table.Columns.All(c => c.Name != "Last Processed"))
+    {
+        var col = table.AddCalculatedColumn("Last Processed");
+        col.Expression    = "NOW()";
+        col.DataType      = TabularEditor.TOMWrapper.DataType.DateTime;
+        col.IsHidden      = true;
+        col.FormatString  = "yyyy-MMM-dd h:mm AM/PM";
+        col.Description   = "Shows when this SSAS table was last processed";
+        col.DisplayFolder = "_Debug";
+    }
+}
+```
+
+#### Step 2: Add `Last Updated Tabular` calculated table
+
+This table UNIONs `MAX([Last Processed])` from every data table into a single result set
+for the Debug tab matrix visual.
+
+```dax
+Last Updated Tabular =
+UNION(
+    ROW(
+        "Last Processed", FORMAT(MAX('Fact Table Name'[Last Processed]), "yyyy-MMM-dd h:mm AM/PM"),
+        "Table Name",     "Fact Table Name"
+    ),
+    ROW(
+        "Last Processed", FORMAT(MAX('Dimension Name'[Last Processed]), "yyyy-MMM-dd h:mm AM/PM"),
+        "Table Name",     "Dimension Name"
+    )
+    -- ... add one ROW() per data table
+)
+```
+
+**Table properties:**
+- `IsHidden = false` — visible to the Debug tab visuals
+- No relationships needed (used as standalone table in the Debug tab matrix)
+
+#### Step 3: DW — Views for Source and DW freshness layers
 
 ```sql
-CREATE TABLE dbo.SSAS_ProcessLog (
+-- DW database: SSAS schema
+-- Layer 1: Source extract tracking (from Internal.LastUpdatedSource)
+CREATE VIEW [SSAS].[Last Updated Source] AS
+SELECT [TableName]  AS [Table Name]
+      ,[UpdateDate] AS [Last Updated]
+FROM [Internal].[LastUpdatedSource];
+
+-- Layer 2: DW load tracking (from Internal.IncrementalLoads)
+CREATE VIEW [SSAS].[Last Loaded DW] AS
+SELECT [TableName] AS [Table Name]
+      ,[LoadDate]  AS [Last Loaded]
+FROM [Internal].[IncrementalLoads];
+```
+
+#### Step 4: Add `Last Updated Source` and `Last Loaded DW` as import tables in SSAS
+
+These are regular import tables in the SSAS model, reading from the views above.
+They appear on the Debug tab alongside `Last Updated Tabular`.
+
+---
+
+### Approach B — SSAS_ProcessLog Table (Alternative)
+
+If you need pipeline-level process logging (e.g., to record who triggered processing, duration,
+or failure reason), create a logging table in the DW and populate it from the ADO pipeline:
+
+```sql
+CREATE TABLE [Internal].[SSAS_ProcessLog] (
     LogID           INT IDENTITY(1,1) PRIMARY KEY,
     DatabaseName    NVARCHAR(255)   NOT NULL,
     ProcessType     NVARCHAR(50)    NOT NULL,   -- 'Full', 'Default', 'Calculate'
@@ -464,80 +512,25 @@ CREATE TABLE dbo.SSAS_ProcessLog (
     ErrorMessage    NVARCHAR(MAX)   NULL
 );
 GO
-
--- Index for latest-success queries
 CREATE NONCLUSTERED INDEX IX_SSAS_ProcessLog_Status_Date
-    ON dbo.SSAS_ProcessLog (ProcessStatus, ProcessedAt DESC);
+    ON [Internal].[SSAS_ProcessLog] (ProcessStatus, ProcessedAt DESC);
 GO
 ```
 
-### Step 3: DW — Update the ELT_BatchLog Table (if needed)
-
-The view above assumes `ELT_BatchLog` has a `LoadedTable` column. Add it if not already present:
-
-```sql
--- Add LoadedTable to ELT_BatchLog if not present
-IF NOT EXISTS (
-    SELECT 1 FROM sys.columns
-    WHERE object_id = OBJECT_ID(N'dbo.ELT_BatchLog') AND name = N'LoadedTable'
-)
-    ALTER TABLE dbo.ELT_BatchLog ADD LoadedTable NVARCHAR(255) NULL;
-GO
-
--- Populate LoadedTable in usp_Transform_* SPs by passing the DW table name
--- to the batch log INSERT/UPDATE at the end of each transform SP
-```
-
-### Step 4: ADO Pipeline — Log SSAS Process Completion
-
-Update `scripts/Process-SsasDatabase.ps1` to log the completion:
+ADO pipeline step after `Process-SsasDatabase.ps1` succeeds:
 
 ```powershell
-# After successful Invoke-ASCmd, log to SSAS_ProcessLog
 $logSql = @"
-INSERT INTO dbo.SSAS_ProcessLog (DatabaseName, ProcessType, ProcessedAt, ProcessStatus, DurationSeconds)
+INSERT INTO Internal.SSAS_ProcessLog
+    (DatabaseName, ProcessType, ProcessedAt, ProcessStatus, DurationSeconds)
 VALUES (N'$DatabaseName', N'$ProcessType', GETDATE(), 'Success', $([int]$elapsed.TotalSeconds));
 "@
 Invoke-Sqlcmd -ServerInstance $DwSqlServer -Database $DwDatabase -Query $logSql
-Write-Host "Process completion logged to SSAS_ProcessLog."
 ```
 
-### Step 5: SSAS Model — Hidden `_DataFreshness` Table
-
-Add a hidden table to the SSAS model that imports from `report.vw_DataFreshness`:
-
-**In Tabular Editor**, add a new table `_DataFreshness` with a partition expression:
-
-```m
-// M partition query (Power Query) — imports the freshness view
-let
-    Source     = Sql.Database("$(SSAS_DW_SERVER)", "$(SSAS_DW_DATABASE)"),
-    FreshView  = Source{[Schema="report", Item="vw_DataFreshness"]}[Data]
-in
-    FreshView
-```
-
-**Table properties:**
-- `IsHidden = true` — hidden from field list; only used by Debug tab measures
-- `Description = "Internal — data freshness metadata for the Debug tab"`
-- No relationships needed (used only via DAX CALCULATE filters)
-
-**Column properties** (all hidden):
-- `DataLayer`     — Text
-- `SystemName`    — Text
-- `TableName`     — Text
-- `LastRefreshed` — DateTime
-- `SortOrder`     — Int64
-
-### Step 6: Publish PBIX to PBIRS
-
-When the report is deployed to PBIRS via `Deploy-PbixReports.ps1`, the data source for the
-`_DataFreshness` table is updated automatically (it uses the same SSAS connection — the freshness
-view is read when SSAS processes, not at report query time).
-
-> **Note**: In a live connection report, the `_DataFreshness` table is queried via DAX from
-> the SSAS model, not directly from SQL Server. The data is as current as the last SSAS process.
-> This is intentional — the model processing timestamp IS the data age end-user cares about.
+> **When to use Approach B**: When Approach A's per-table granularity is insufficient and you
+> need a full audit trail of all process runs, failures, and durations in the DW for ops reporting.
+> Both approaches can coexist — Approach A gives per-table freshness; Approach B gives pipeline history.
 
 ---
 

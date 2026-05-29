@@ -3,6 +3,17 @@
 Based on Ralph Kimball's *The Data Warehouse Toolkit* (3rd ed.) and the Kimball Group methodology.
 Supplemented with SQL Server 2016–2022 on-premises physical design guidance.
 
+## Learning Resources
+
+| Resource | Author | Format | Level | Notes |
+|---|---|---|---|---|
+| *The Data Warehouse Toolkit* (3rd ed.) | Ralph Kimball & Margy Ross | Book | All | Definitive reference for dimensional modeling |
+| *The Data Warehouse ETL Toolkit* | Kimball & Caserta | Book | Intermediate | ETL/ELT design patterns |
+| [Designing a Data Warehouse on the Microsoft SQL Server Platform](https://www.pluralsight.com/courses/sql-server-platform-designing-data-warehouse) | Ana Voicu | Pluralsight (4h 35m) | Intermediate | End-to-end: dimensional modeling → DW database → SSIS load → reports. Requires Pluralsight subscription. |
+| [SQLBI.com](https://sqlbi.com) | Marco Russo & Alberto Ferrari | Website / books | All | DAX patterns, SSAS Tabular optimization, PBIX best practices |
+| [daxpatterns.com](https://daxpatterns.com) | Marco Russo & Alberto Ferrari | Website | Intermediate | Ready-to-use DAX patterns library |
+| [Kimball Group Design Tips](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/dimensional-modeling-techniques/) | Kimball Group | Website | All | Quick reference for individual techniques |
+
 ---
 
 ## Core Vocabulary

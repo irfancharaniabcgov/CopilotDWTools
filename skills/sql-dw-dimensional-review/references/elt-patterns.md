@@ -44,6 +44,167 @@ than using SSIS data transformations."*
 
 ---
 
+## DW Schema Convention
+
+Both reference projects (`EAO_DW`, `SNOW_DW`) use **schema-based separation** instead of naming prefixes.
+This is the primary convention for this toolkit.
+
+| Schema | Purpose | Example objects |
+|---|---|---|
+| `Staging` | Raw data landed by SSIS — truncated and reloaded each run | `Staging.AdviceAndAssistance`, `Staging.project_tasks` |
+| `Dimension` | Conformed dimension tables + load SPs | `Dimension.Calendar`, `Dimension.LoadCalendar` |
+| `Fact` | Fact tables + load SPs | `Fact.AdviceAndAssistance`, `Fact.LoadAdviceAndAssistance` |
+| `Internal` | Control/metadata tables and utility SPs | `Internal.Lineage`, `Internal.IncrementalLoads`, `Internal.GetLastLoadedDate` |
+| `SSAS` | Views exposed to the SSAS data source — SSAS account gets `SELECT` here only | `SSAS.[Advice And Assistance]`, `SSAS.[Last Loaded DW]` |
+| `Security` | Schema-level permission grants (in SSDT post-deploy) | `GRANT SELECT ON SCHEMA::SSAS TO [dw]` |
+
+> **Why schemas instead of prefixes?**
+> Schema-based separation means you never need to write `dim_`, `fact_`, or `stg_` prefixes.
+> The schema IS the classification. `SELECT * FROM Dimension.Calendar` is unambiguous.
+> Security is also cleaner: `GRANT SELECT ON SCHEMA::SSAS TO [ssas_service_account]` in one line.
+
+### SP Naming Convention
+
+SPs live **in the schema they operate on**, with no `usp_`/`sp_` prefix:
+
+| Pattern | Example | Purpose |
+|---|---|---|
+| `[Schema].[Load<TableName>]` | `Fact.LoadAdviceAndAssistance` | Load a DW table from staging |
+| `[Schema].[Get<Resource>]` | `Internal.GetLastLoadedDate` | Lookup/helper SP |
+| `[Schema].[Reset<Scope>]` | `Internal.ResetForFullLoad` | Maintenance SP |
+| `Internal.RethrowError` | — | Error re-throw (called from all CATCH blocks) |
+| `Internal.ProcedureErrorInsert` | — | Detailed error logging |
+
+Source-side extract SPs (in the source DB, not the DW) use: `dbo.usp_Extract_<TableName>`.
+
+### Internal Control Tables (project pattern)
+
+These four tables live in the `Internal` schema and track all load activity:
+
+```sql
+-- Tracks in-progress and completed loads with row count and status
+-- Status: 'P' = in progress, 'S' = success, 'F' = failed
+-- Type: 'F' = full, 'I' = incremental
+CREATE TABLE [Internal].[Lineage] (
+    [LineageKey]     INT            IDENTITY (1, 1) NOT NULL PRIMARY KEY,
+    [TableName]      NVARCHAR (200) NOT NULL,
+    [StartLoad]      DATETIME2 (7)  NOT NULL,
+    [FinishLoad]     DATETIME2 (7)  NULL,
+    [LastLoadedDate] DATETIME2 (7)  NOT NULL,
+    [Status]         NVARCHAR (1)   DEFAULT (N'P') NOT NULL,  -- P=in-progress, S=success, F=failed
+    [Type]           NVARCHAR (1)   DEFAULT (N'F') NOT NULL,  -- F=full, I=incremental
+    [RowCount]       BIGINT         DEFAULT ((0)) NOT NULL
+);
+
+-- High-water mark: last successful load date per table (used for incremental extraction)
+CREATE TABLE [Internal].[IncrementalLoads] (
+    [LoadDateKey]  INT            IDENTITY (1, 1) NOT NULL PRIMARY KEY,
+    [TableName]    NVARCHAR (100) NOT NULL,
+    [LoadDate]     DATETIME2 (7)  NOT NULL
+);
+
+-- Source system "last updated" tracking (for the Debug tab Source layer)
+CREATE TABLE [Internal].[LastUpdatedSource] (
+    [UpdateDateKey] INT            IDENTITY (1, 1) NOT NULL PRIMARY KEY,
+    [TableName]     NVARCHAR (100) NOT NULL,
+    [UpdateDate]    DATETIME2 (7)  NOT NULL
+);
+
+-- Error log: captures CATCH block details from any SP
+CREATE TABLE [Internal].[ProcedureError] (
+    [ErrorID]        INT             IDENTITY (1, 1) NOT NULL PRIMARY KEY,
+    [ErrorLine]      INT             NULL,
+    [ErrorMessage]   NVARCHAR (4000) NULL,
+    [ErrorNumber]    INT             NULL,
+    [ErrorProcedure] NVARCHAR (126)  NULL,
+    [ErrorSeverity]  INT             NULL,
+    [ErrorState]     INT             NULL,
+    [DBName]         NVARCHAR (128)  NULL,
+    [UserStamp]      NVARCHAR (50)   DEFAULT (suser_sname()) NOT NULL,
+    [TimeStamp]      DATETIME        DEFAULT (getutcdate()) NOT NULL
+);
+
+-- Schema version tracking: drives versioned post-deployment scripts
+CREATE TABLE [Internal].[DbVersion] (
+    [VersionNumber] INT      NOT NULL,
+    [Updated]       DATETIME NOT NULL DEFAULT GETDATE()
+);
+```
+
+> **Note:** The generic patterns in Layer 4 below use `dbo.ELT_ControlTable` / `dbo.ELT_BatchLog`
+> naming. These are equivalent in purpose to `Internal.Lineage` / `Internal.IncrementalLoads`.
+> Either naming approach is valid; the `Internal` schema approach is used by the reference projects.
+
+### Standard SP Error Handling Template
+
+Every load SP uses this pattern (from `Internal.RethrowError`):
+
+```sql
+CREATE PROCEDURE [Schema].[LoadTableName]
+AS
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+
+DECLARE @LastDateLoaded DATETIME2(7);
+DECLARE @TableName NVARCHAR(200) = N'Schema.TableName';
+
+BEGIN TRY
+    IF @@NESTLEVEL = 1 AND @@TRANCOUNT = 0 BEGIN TRANSACTION
+
+    DECLARE @LineageKey INT = (
+        SELECT TOP(1) LineageKey FROM Internal.Lineage
+        WHERE TableName = @TableName AND FinishLoad IS NULL
+        ORDER BY LineageKey DESC
+    );
+
+    -- ... load logic here ...
+
+    UPDATE Internal.Lineage
+    SET FinishLoad = SYSDATETIME(), Status = 'S',
+        @LastDateLoaded = LastLoadedDate, [RowCount] = @@ROWCOUNT
+    WHERE LineageKey = @LineageKey;
+
+    UPDATE Internal.IncrementalLoads
+    SET LoadDate = @LastDateLoaded
+    WHERE TableName = @TableName;
+
+    IF @@NESTLEVEL = 1 AND @@TRANCOUNT > 0 COMMIT TRANSACTION
+    RETURN 0
+
+END TRY
+BEGIN CATCH
+    IF @@NESTLEVEL = 1 AND @@TRANCOUNT > 0 ROLLBACK TRANSACTION
+    EXECUTE Internal.RethrowError
+    RETURN ERROR_NUMBER()
+END CATCH
+```
+
+### Fact Load Pattern — DELETE + INSERT (preferred over MERGE)
+
+```sql
+-- Delete existing records that overlap with the current staging window
+-- (prevents duplicates on re-run)
+DELETE f
+FROM Fact.AdviceAndAssistance f
+    INNER JOIN Staging.AdviceAndAssistance s
+    ON f._SourceAdviceAndAssistanceID = s._SourceAdviceAndAssistanceID;
+
+-- Insert from staging, resolving dimension keys with LEFT JOIN + ISNULL(key, 0)
+-- Unknown member (key = 0) must exist in every dimension for unresolvable rows
+INSERT INTO Fact.AdviceAndAssistance (...)
+SELECT d.DimKey, ISNULL(r.RegionKey, 0), ...
+FROM Staging.AdviceAndAssistance s
+    INNER JOIN Dimension.Calendar c ON s.ServiceStartDate = c.DateKey
+    LEFT  JOIN Dimension.Region   r ON s.RegionCode = r._SourceRegionCode;
+```
+
+> **Why DELETE + INSERT over MERGE?**
+> Simpler code, easier to read and debug, no MERGE concurrency edge cases.
+> Comment from reference project: *"Code here simpler/easier to read than MERGE statement"*.
+> Use MERGE only when you need to update existing fact rows in place (rare).
+
+---
+
 ## Layer 1: Source Database — Extract Stored Procedures
 
 ### Design Principles
@@ -656,7 +817,11 @@ Each child package runs its tasks **in parallel** within its stage.
 
 ---
 
-### Package 1: `Master_Orchestrator.dtsx`
+### Package 1: `Master_Orchestrator.dtsx` (also called `Package.dtsx`)
+
+> **Naming**: The reference projects use `Package.dtsx` as the orchestrator name (the SSIS default).
+> Both `Package.dtsx` and `Master_Orchestrator.dtsx` are acceptable names — the key is that
+> the SQL Agent job calls **only this one package**.
 
 Runs the three child packages in strict sequence. Uses **Execute Package Task** for each child.
 Captures overall job status and advances the high-water mark only on full success.
