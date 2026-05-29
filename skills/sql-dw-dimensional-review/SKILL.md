@@ -1,11 +1,18 @@
 ---
 name: 'sql-dw-dimensional-review'
-description: 'Dimensional modeling review for SQL Server Data Warehouses, Analysis Services Tabular models, and DAX measures. Applies Kimball methodology (fact/dim design, SCD types, bus matrix, grain) and SQLBI/DAX Patterns best practices. Use this skill when reviewing a DW schema, an SSAS Tabular model, DAX measures, or when generating sp_addextendedproperty documentation scripts.'
+description: 'Dimensional modeling review for SQL Server Data Warehouses, Analysis Services Tabular models, and DAX measures. Applies Kimball methodology (fact/dim design, SCD types, bus matrix, grain) and SQLBI/DAX Patterns best practices. Use this skill when reviewing a DW schema, an SSAS Tabular model, DAX measures, when generating sp_addextendedproperty documentation scripts, or when reviewing/generating ELT pipelines and ADO Server deployment scripts.'
 ---
 
 # SQL DW Dimensional Review Skill
 
 You are in **DW / SSAS Dimensional Review mode**. Use the bundled reference files as your authoritative knowledge base. Always cite the specific pattern or checklist item when making a recommendation.
+
+## Automation-First Principle
+
+This stack is managed by **on-premises Azure DevOps Server** with self-hosted agents. Every script,
+configuration, and deployment artifact you generate **must be executable from a pipeline step with
+no manual interaction**. Before finalizing any output, validate it against the deployment checklist
+in `references/devops-deployment-patterns.md` Section 9.
 
 ## When to Activate This Skill
 
@@ -26,8 +33,10 @@ Activate when the user asks to:
 | `references/kimball-patterns.md` | Fact/dim design review, grain definition, SCD identification, bus matrix, bridge tables |
 | `references/sqlbi-dax-patterns.md` | DAX measure review, time intelligence, semi-additive, many-to-many, calculation groups |
 | `references/ssas-tabular-bp.md` | SSAS Tabular model review, naming conventions, relationships, DMV queries, partition strategy |
-| `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts for any DW object |
+| `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts; InformationType + SensitivityLabel classification |
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
+| `references/elt-patterns.md` | ELT pipeline review, SSIS 4-package structure, source SP patterns, staging/transform design |
+| `references/devops-deployment-patterns.md` | ADO Server pipeline YAML, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
 
 ## Operating Modes
 
@@ -81,12 +90,38 @@ Activate when the user asks to:
 4. Flag missing expected dimensions (e.g., fact table with no Date FK)
 5. Flag potential non-conformed dimensions
 
+### Mode F: ELT Pipeline Review
+**Input**: SSIS package design description, source SP code, staging schema, or transform SP code
+**Process**:
+1. Classify the pipeline architecture against the 4-package pattern in `elt-patterns.md`
+2. Check source SPs: parameterized `@StartDate`/`@EndDate`, `NOLOCK`, no transforms
+3. Check SSIS data flows: raw extract only (no derived columns, lookups, or expressions)
+4. Check staging tables: all nullable, no FKs, `staging.stg_<Prefix>_<TableName>` naming
+5. Check transform SPs: upsert/MERGE pattern for dims, append+aggregate for facts
+6. Check ELT control tables: `ELT_ControlTable` high-water mark, `ELT_BatchLog` row
+7. Check package structure: all child packages run tasks in parallel; Master_Orchestrator runs children in sequence
+8. Produce findings report with references to `elt-patterns.md` sections
+
+### Mode G: DevOps Deployment Review
+**Input**: Pipeline YAML, PowerShell deployment scripts, SSIS project structure, or SSAS model deployment approach
+**Process**:
+1. Run the deployment checklist from `devops-deployment-patterns.md` Section 9
+2. Identify hardcoded values, missing exit codes, non-idempotent patterns
+3. Flag any step that requires GUI/manual interaction
+4. Check pipeline stage ordering: DB → SSIS → SSAS → PBIX
+5. Check SSIS deployment uses project model + SSISDB environments (not package model)
+6. Check SSAS deployment uses Tabular Editor CLI (not VS GUI)
+7. Check PBIX upload includes data source update post-upload
+8. Produce findings report with references to `devops-deployment-patterns.md` sections
+
 ## Output Standards
 
 - Always produce a **severity-coded findings report** (🔴 Critical / 🟠 High / 🟡 Medium / 🔵 Low) using the template in `dw-review-checklist.md`
 - Always cite the specific Kimball pattern, SQLBI pattern, or checklist item for each finding
 - For extended properties output: produce complete, ready-to-run T-SQL using the upsert pattern
 - For bus matrix output: produce a markdown table with ✓ marks for confirmed relationships
+- For ELT output: generate parameterized T-SQL SPs and pipeline YAML steps, not GUI click instructions
+- For deployment scripts: all PowerShell must follow the standards in `devops-deployment-patterns.md` Section 7 — `[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`
 - Ask clarifying questions before assuming the grain of a fact table — grain definition requires domain knowledge
 
 ## Interaction Style
