@@ -129,6 +129,9 @@ SELECT t.[Name], m.[Name], m.[Expression], m.[Description], m.[FormatString], m.
 3. Prompt for any missing context: business owner, source system, grain (for fact tables), SCD type (for dimension tables)
 4. Generate complete T-SQL script using the upsert pattern (sp_updateextendedproperty / sp_addextendedproperty)
 5. Group scripts by table in a deployment-ready script with transaction and error handling
+6. For SQL Server 2019+ databases: also generate `ADD SENSITIVITY CLASSIFICATION` statements
+   (from `data-classification.md`) for table columns alongside the extended property script
+7. Table-level `SensitivityLabel` is always set via extended property (native classification is columns-only)
 
 **Standard properties to generate for every table**:
 - `MS_Description` (required)
@@ -138,6 +141,7 @@ SELECT t.[Name], m.[Name], m.[Expression], m.[Description], m.[FormatString], m.
 - `SourceSystem`
 - `BusinessOwner`
 - `RefreshFrequency`
+- `SensitivityLabel` (table-level — set to highest column label)
 
 ---
 
