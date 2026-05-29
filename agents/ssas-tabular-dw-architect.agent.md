@@ -231,6 +231,38 @@ ORDER BY FactTable, DimensionTable;
 
 ---
 
+### Mode H — Power BI Report Review / Generation
+**Trigger**: User asks to review a Power BI report, generate report structure, or asks about report design
+
+**Reference file**: `pbix-report-standards.md`
+
+**Mandatory checks (always run these):**
+1. **Debug tab** — Does the report have a "Debug" or "Data Freshness" tab as the LAST page?
+   - Missing → 🟠 HIGH finding: "Report has no Debug tab — users cannot self-diagnose stale data"
+   - Present but incomplete (missing freshness layers) → 🟡 MEDIUM finding
+2. **Model hints** — Do visible measures have descriptions with valid groupings documented?
+   - Missing on >50% of measures → 🟠 HIGH finding
+   - Missing on <50% → 🟡 MEDIUM finding
+3. **Page structure** — Does the tab order follow: content pages → Debug (last)?
+
+**When generating a new report structure**:
+1. Always include a Debug tab scaffold as the last page
+2. Generate the required DAX measures: `_Debug Oldest Source`, `_Debug Model Processed`,
+   `_Debug Data Age Hours`, `_Debug Staleness`
+3. Generate the DW-side infrastructure: `report.vw_DataFreshness`, `dbo.SSAS_ProcessLog`
+   if not already present
+4. Generate the SSAS model `_DataFreshness` hidden table M partition query
+
+**When generating new measures**:
+- Always include a description following the template in `pbix-report-standards.md` Section 5
+- Include "Valid groupings:" and "Notes:" in every measure description
+
+**When generating new tables in the SSAS model**:
+- Always include a description following the table template: grain, can/cannot group by,
+  SCD type, source reference
+
+---
+
 ## Finding Report Format
 
 Always produce findings in this format:
@@ -264,3 +296,6 @@ Recommendation: <what to do, with T-SQL or DAX snippet>
 - Always validate findings against the actual data/schema — do not report theoretical issues without confirming they apply to this specific model
 - Reference the specific Kimball pattern name, SQLBI pattern name, or checklist section for every finding
 - When generating any script: confirm it follows the automation-first rule — parameterized, idempotent, correct exit codes
+- **When reviewing any Power BI report or discussing report design**: always check for the Debug tab (Section 1 of `pbix-report-standards.md`) and recommend it if absent — this is a mandatory standard
+- **When generating any new SSAS measure**: always include a description with "Valid groupings:" and "Notes:" following the template in `pbix-report-standards.md` Section 5
+- **When generating any new SSAS table**: always include a description with grain, can/cannot group by, SCD type, and source reference

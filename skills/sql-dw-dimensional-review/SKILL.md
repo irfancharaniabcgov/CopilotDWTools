@@ -39,6 +39,7 @@ Activate when the user asks to:
 | `references/devops-deployment-patterns.md` | ADO Server pipeline YAML, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
+| `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
 
 ## Operating Modes
 
