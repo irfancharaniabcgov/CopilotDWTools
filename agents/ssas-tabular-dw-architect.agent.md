@@ -244,6 +244,10 @@ ORDER BY FactTable, DimensionTable;
    - Missing on >50% of measures → 🟠 HIGH finding
    - Missing on <50% → 🟡 MEDIUM finding
 3. **Page structure** — Does the tab order follow: content pages → Debug (last)?
+4. **Custom visuals** — Do any visuals in the report lack the blue Microsoft certification badge?
+   - Any uncertified custom visual → 🔴 CRITICAL finding: "Uncertified custom visual present — must be
+     replaced before publishing. Only Microsoft-certified visuals (blue checkmark) are approved."
+   - Certified paid visual → 🟡 MEDIUM note: "⚠️ Licensed visual — confirm org has active licence"
 
 **When generating a new report structure**:
 1. Always include a Debug tab scaffold as the last page
@@ -253,8 +257,13 @@ ORDER BY FactTable, DimensionTable;
    if not already present
 4. Generate the SSAS model `_DataFreshness` hidden table M partition query
 
+**When recommending visuals** (Section 3 of `pbix-report-standards.md`):
+- Suggest built-in visuals first; if a custom visual is recommended, explicitly note that it must carry
+  the blue Microsoft certification badge in AppSource before use
+- Flag any paid visuals with a licensing cost warning
+
 **When generating new measures**:
-- Always include a description following the template in `pbix-report-standards.md` Section 5
+- Always include a description following the template in `pbix-report-standards.md` Section 6
 - Include "Valid groupings:" and "Notes:" in every measure description
 
 **When generating new tables in the SSAS model**:

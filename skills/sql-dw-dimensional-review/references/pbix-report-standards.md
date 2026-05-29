@@ -325,7 +325,58 @@ Add to your BPA rules file (`bpa-rules.json`):
 
 ---
 
-## 3. Report Page Structure Standards
+## 3. Power BI Visuals Policy
+
+### Approved Visuals
+
+Reports may use the following visuals:
+
+| Visual Type | Approved? | Notes |
+|---|---|---|
+| **Power BI out-of-the-box visuals** | ✅ Yes — always | Bar, column, line, pie, table, matrix, card, map, etc. |
+| **Microsoft-certified custom visuals** | ✅ Yes | Must display the **blue Microsoft certification checkmark** in the marketplace |
+| **Uncertified custom visuals** | ❌ No | Not approved regardless of publisher or popularity |
+
+### Power BI Marketplace — How to Identify Approved Visuals
+
+Custom visuals are downloaded from the Power BI Marketplace (AppSource) via:
+**Power BI Desktop → Insert → More visuals → From AppSource**
+
+When browsing the marketplace, look for the **blue checkmark badge** on the visual tile:
+
+```
+✅ Approved:    Visual tile shows a blue  ✓ "Microsoft certified" badge
+❌ Not approved: Visual tile has no badge, or shows a warning icon
+```
+
+> **The blue certification badge means Microsoft has reviewed the visual's source code for
+> security, privacy, and code quality standards.** Uncertified visuals have not been reviewed
+> and may pose data privacy or security risks when used with Protected A/B/C data.
+
+### Practical Guidance for Developers
+
+1. **Before adding a custom visual**: check for the blue certification badge in AppSource
+2. **Cost**: not all certified visuals are free — some require a paid licence from the publisher.
+   Confirm licensing cost before committing to a visual in a report.
+3. **Version updates**: certified visuals update automatically in Power BI Desktop.
+   After a visual update, re-test the report before publishing to PBIRS.
+4. **Fallback**: if no certified visual exists for your use case, use the closest built-in
+   visual and document the limitation as a known constraint in the report notes.
+5. **Report review**: during report review, any uncertified custom visual is a 🔴 Critical
+   finding — it must be replaced before the report is published to PBIRS.
+
+### Agent Behaviour for Visual Recommendations
+
+When recommending visuals for a Power BI report in this environment:
+- Suggest **built-in visuals first** — they require no extra licencing or certification review
+- If a custom visual is recommended, explicitly note:
+  `"This visual must carry the blue Microsoft certification badge in AppSource before use"`
+- If suggesting a paid custom visual, flag: `"⚠️ Licensing cost — confirm with team before adopting"`
+- Never recommend an uncertified visual as a solution
+
+---
+
+## 4. Report Page Structure Standards
 
 All PBIRS live connection reports should follow this page structure:
 
@@ -345,7 +396,7 @@ All PBIRS live connection reports should follow this page structure:
 
 ---
 
-## 4. Data Freshness Infrastructure (DW + SSAS Side)
+## 5. Data Freshness Infrastructure (DW + SSAS Side)
 
 The Debug tab requires infrastructure in both the DW database and the SSAS model.
 
@@ -490,7 +541,7 @@ view is read when SSAS processes, not at report query time).
 
 ---
 
-## 5. SSAS Model Description Standards (Reference for Agents)
+## 6. SSAS Model Description Standards (Reference for Agents)
 
 When the agent generates extended property scripts or SSAS model descriptions, apply these
 standards for descriptions that serve as model hints:
