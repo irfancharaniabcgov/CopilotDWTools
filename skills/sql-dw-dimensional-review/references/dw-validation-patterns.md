@@ -245,12 +245,18 @@ Expected result: returns 1 row without error.
 Run against the semantic endpoint.
 
 ```sql
-SELECT [Name], [State]
-FROM $SYSTEM.TMSCHEMA_TABLES
-WHERE [IsPrivate] = FALSE;
+-- State = 1 means Ready. Query partitions (which hold state) joined to tables.
+SELECT
+    t.[Name]  AS TableName,
+    p.[Name]  AS PartitionName,
+    p.[State] AS PartitionState   -- 1 = Ready, 2 = NoData, 3 = CalculationNeeded, 4 = SemanticError
+FROM $SYSTEM.TMSCHEMA_PARTITIONS p
+JOIN $SYSTEM.TMSCHEMA_TABLES     t ON p.[TableID] = t.[ID]
+WHERE t.[IsHidden] = FALSE
+ORDER BY t.[Name], p.[Name];
 ```
 
-Expected result: all user-facing tables are in ready state.
+Expected result: all rows show `PartitionState = 1` (Ready). Any other value means the partition needs processing.
 
 ### 5c. Last Successful ELT Run
 

@@ -1,4 +1,4 @@
-﻿# SSDT Database Project Structure Reference
+# SSDT Database Project Structure Reference
 
 **Scope:** Authoritative project-structure reference for Visual Studio SSDT Database Projects used for DW schema artifacts in this organisation. Applies to GitHub Copilot Skill Mode H (DW Schema Scaffold), Mode N (Full Orchestrated Build), and Mode G (DevOps Deployment Review).
 
@@ -73,7 +73,7 @@ GitRoot\
     Security\
     Snapshots\
     Scripts\
-  SharedCalendar\              ← optional shared reference project
+  SharedCalendar\              ? optional shared reference project
     SharedCalendar.sqlproj
 ```
 
@@ -101,7 +101,7 @@ The project is organised by schema, then object type. `SSAS` contains views only
 Dimension\
   Tables\
   Stored Procedures\
-  Views\         ← rarely used; SSAS views live in SSAS\ not here
+  Views\         ? rarely used; SSAS views live in SSAS\ not here
 Fact\
   Tables\
   Stored Procedures\
@@ -109,21 +109,21 @@ Staging\
   Tables\
   Stored Procedures\
 Internal\
-  Tables\        ← Internal.Lineage, Internal.IncrementalLoads, Internal.LastUpdatedSource
+  Tables\        ? Internal.Lineage, Internal.IncrementalLoads, Internal.LastUpdatedSource
   Stored Procedures\
   Functions\
 SSAS\
-  Views\         ← ALL partition source views live here; column aliases Title Case with spaces
+  Views\         ? ALL partition source views live here; column aliases Title Case with spaces
 Security\
-  Roles\         ← db-level roles (not SSAS roles)
+  Roles\         ? db-level roles (not SSAS roles)
   Schemas\
 Snapshots\
   Tables\
 Scripts\
-  PreDeploy\     ← PreDeployment.sql (single entry point using :r includes)
-  PostDeploy\    ← PostDeployment.sql (single entry point using :r includes)
-  SeedData\      ← idempotent MERGE statements for reference/seed data
-  ExtendedProperties\ ← sp_addextendedproperty scripts, organised by schema
+  PreDeploy\     ? PreDeployment.sql (single entry point using :r includes)
+  PostDeploy\    ? PostDeployment.sql (single entry point using :r includes)
+  SeedData\      ? idempotent MERGE statements for reference/seed data
+  ExtendedProperties\ ? sp_addextendedproperty scripts, organised by schema
 ```
 
 ### Schema object examples
@@ -159,14 +159,14 @@ GO
 - Load stored procedures use `Schema.Load{Entity}`, for example `Staging.LoadCustomer` and `Dimension.LoadCustomer`.
 
 ```text
-Dimension\Tables\Customer.sql              → [Dimension].[Customer]
-Dimension\Tables\Calendar.sql              → [Dimension].[Calendar]
-Fact\Tables\Sales.sql                       → [Fact].[Sales]
-Staging\Tables\Customer.sql                 → [Staging].[Customer]
-Staging\Stored Procedures\LoadCustomer.sql  → [Staging].[LoadCustomer]
-Dimension\Stored Procedures\LoadCustomer.sql → [Dimension].[LoadCustomer]
-Internal\Tables\Lineage.sql                 → [Internal].[Lineage]
-SSAS\Views\Customer.sql                     → [SSAS].[Customer] feeding SSAS table Customer
+Dimension\Tables\Customer.sql              ? [Dimension].[Customer]
+Dimension\Tables\Calendar.sql              ? [Dimension].[Calendar]
+Fact\Tables\Sales.sql                       ? [Fact].[Sales]
+Staging\Tables\Customer.sql                 ? [Staging].[Customer]
+Staging\Stored Procedures\LoadCustomer.sql  ? [Staging].[LoadCustomer]
+Dimension\Stored Procedures\LoadCustomer.sql ? [Dimension].[LoadCustomer]
+Internal\Tables\Lineage.sql                 ? [Internal].[Lineage]
+SSAS\Views\Customer.sql                     ? [SSAS].[Customer] feeding SSAS table Customer
 ```
 
 ### Table and SSAS view templates
@@ -210,10 +210,10 @@ GO
 
 ### Required build actions
 
-- `Build` — all `.sql` object files that define database objects.
-- `None` — snapshot files, reference data source files, generated deployment scripts, and documentation.
-- `PreDeploy` — exactly one file: `Scripts\PreDeploy\PreDeployment.sql`.
-- `PostDeploy` — exactly one file: `Scripts\PostDeploy\PostDeployment.sql`.
+- `Build` � all `.sql` object files that define database objects.
+- `None` � snapshot files, reference data source files, generated deployment scripts, and documentation.
+- `PreDeploy` � exactly one file: `Scripts\PreDeploy\PreDeployment.sql`.
+- `PostDeploy` � exactly one file: `Scripts\PostDeploy\PostDeployment.sql`.
 
 ### `.sqlproj` build-action template
 
@@ -397,7 +397,7 @@ GO
     <Value>$(dw_db_catalog)</Value>
   </SqlCmdVariable>
   <SqlCmdVariable Include="SSASServer">
-    <Value>$(ssas_server)</Value>
+    <Value>$(sass_server)</Value>
   </SqlCmdVariable>
   <SqlCmdVariable Include="SSASCatalog">
     <Value>$(ssas_catalog)</Value>
@@ -405,7 +405,7 @@ GO
 </ItemGroup>
 ```
 
-## 8. Publish profiles (.publish.xml) — one per environment
+## 8. Publish profiles (.publish.xml) � one per environment
 
 Publish profiles provide dev-time defaults. Azure DevOps Server pipelines override connection strings and SQLCMD values with `$(db_server)`, `$(dw_db_catalog)`, and environment-specific variable groups. SUPPORT mirrors PROD values but targets the SUPPORT catalog/server allocation.
 
@@ -518,7 +518,7 @@ Add this SQLCMD `ItemGroup` to each profile and let ADO substitute environment-s
     <Value>$(dw_db_catalog)</Value>
   </SqlCmdVariable>
   <SqlCmdVariable Include="SSASServer">
-    <Value>$(ssas_server)</Value>
+    <Value>$(sass_server)</Value>
   </SqlCmdVariable>
   <SqlCmdVariable Include="SSASCatalog">
     <Value>$(ssas_catalog)</Value>
@@ -526,20 +526,20 @@ Add this SQLCMD `ItemGroup` to each profile and let ADO substitute environment-s
 </ItemGroup>
 ```
 
-## 9. Checklist — common SSDT project mistakes
+## 9. Checklist � common SSDT project mistakes
 
 | Severity | Mistake | Impact | Required correction |
 |---|---|---|---|
-| 🔴 Critical | Missing `master.dacpac` or `msdb.dacpac` references | Build errors for system objects and SQL Agent references | Add SSDT artifact references with correct SQL Server version. |
-| 🔴 Critical | SQLCMD variables not defined in `.sqlproj` or publish profile | Deploy errors or unresolved token deployment | Define standard variables and map them in ADO variable groups. |
-| 🔴 Critical | PostDeploy script not idempotent | Duplicate rows, failed reruns, or data loss on repeat deployment | Use `IF NOT EXISTS`, `MERGE`, or guarded inserts. |
-| 🔴 Critical | Destructive changes hidden in PreDeploy or PostDeploy | Production data loss outside DACPAC review | Move to reviewed migration script with explicit approval. |
-| 🟡 Warning | Object files in the wrong schema folder | Maintainability and review issue | Move files to canonical schema folder. |
-| 🟡 Warning | SSAS partition source views placed in `Dimension\Views\` | Wrong schema and inconsistent SSAS source contract | Move all SSAS-facing views to `SSAS\Views\`. |
-| 🟡 Warning | Table names repeat schema classification in the object name | Violates schema-as-classifier convention | Rename objects so the schema is the only classifier, for example `Dimension.Customer` or `Staging.Customer`. |
-| 🟡 Warning | Staging tables missing `LineageKey INT NULL` | Load audit cannot trace source batches | Add `LineageKey` and populate from `Internal.Lineage`. |
-| 🟡 Warning | Load procedure names do not use `Schema.Load{Entity}` | Inconsistent orchestration and review automation | Rename to `Staging.LoadCustomer`, `Dimension.LoadCustomer`, etc. |
-| 🟢 Info | `Snapshots` or seed data marked as `Build` unintentionally | Unexpected DACPAC contents | Set non-object files to `None`. |
+| ?? Critical | Missing `master.dacpac` or `msdb.dacpac` references | Build errors for system objects and SQL Agent references | Add SSDT artifact references with correct SQL Server version. |
+| ?? Critical | SQLCMD variables not defined in `.sqlproj` or publish profile | Deploy errors or unresolved token deployment | Define standard variables and map them in ADO variable groups. |
+| ?? Critical | PostDeploy script not idempotent | Duplicate rows, failed reruns, or data loss on repeat deployment | Use `IF NOT EXISTS`, `MERGE`, or guarded inserts. |
+| ?? Critical | Destructive changes hidden in PreDeploy or PostDeploy | Production data loss outside DACPAC review | Move to reviewed migration script with explicit approval. |
+| ?? Warning | Object files in the wrong schema folder | Maintainability and review issue | Move files to canonical schema folder. |
+| ?? Warning | SSAS partition source views placed in `Dimension\Views\` | Wrong schema and inconsistent SSAS source contract | Move all SSAS-facing views to `SSAS\Views\`. |
+| ?? Warning | Table names repeat schema classification in the object name | Violates schema-as-classifier convention | Rename objects so the schema is the only classifier, for example `Dimension.Customer` or `Staging.Customer`. |
+| ?? Warning | Staging tables missing `LineageKey INT NULL` | Load audit cannot trace source batches | Add `LineageKey` and populate from `Internal.Lineage`. |
+| ?? Warning | Load procedure names do not use `Schema.Load{Entity}` | Inconsistent orchestration and review automation | Rename to `Staging.LoadCustomer`, `Dimension.LoadCustomer`, etc. |
+| ?? Info | `Snapshots` or seed data marked as `Build` unintentionally | Unexpected DACPAC contents | Set non-object files to `None`. |
 
 ## Approved tooling
 
