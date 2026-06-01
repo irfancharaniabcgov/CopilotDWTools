@@ -132,6 +132,26 @@ SELECT t.[Name], m.[Name], m.[Expression], m.[Description], m.[FormatString], m.
 - Partition strategy on large tables
 - RLS roles defined and tested
 
+**Power BI Report Review (live connection to SSAS)**:
+When the user provides a Power BI report file (.pbix) or asks to review a report connected live to SSAS, also run these checks (reference: `pbix-report-standards.md`):
+1. **Debug tab** — Is there a "Debug" or "Data Freshness" tab as the LAST page?
+   - Missing → 🟠 HIGH: "Report has no Debug tab — users cannot self-diagnose stale data"
+   - Present but incomplete (missing freshness layers) → 🟡 MEDIUM
+2. **Model hints** — Do visible measures have descriptions with valid groupings?
+   - Missing on >50% of measures → 🟠 HIGH; missing on <50% → 🟡 MEDIUM
+3. **Page structure** — Tab order: content pages → Debug (last)
+4. **Custom visuals** — Any visual without the blue Microsoft certification badge?
+   - Any uncertified custom visual → 🔴 CRITICAL: "Uncertified custom visual — must be replaced before publishing"
+   - Certified paid visual → 🟡 MEDIUM: "⚠️ Licensed visual — confirm org has active licence"
+
+**When generating a new report structure**:
+1. Always include a Debug tab scaffold as the last page
+2. Generate Debug DAX measures: `_Debug Oldest Source`, `_Debug Model Processed`, `_Debug Data Age Hours`, `_Debug Staleness`
+3. Generate DW-side freshness infrastructure: `SSAS` views + `[Internal].[SSASProcessLog]`
+4. Generate the SSAS model `_DataFreshness` hidden table M partition query
+
+**When recommending visuals**: suggest built-in visuals first; if a custom visual is needed, flag that it must carry the Microsoft certification badge in AppSource. Flag paid visuals with a licensing cost warning.
+
 ---
 
 ### Mode C — Extended Properties Script Generation
@@ -246,44 +266,65 @@ ORDER BY FactTable, DimensionTable;
 
 ---
 
-### Mode H — Power BI Report Review / Generation
-**Trigger**: User asks to review a Power BI report, generate report structure, or asks about report design
+---
 
-**Reference file**: `pbix-report-standards.md`
+## Build Modes (H–N)
 
-**Mandatory checks (always run these):**
-1. **Debug tab** — Does the report have a "Debug" or "Data Freshness" tab as the LAST page?
-   - Missing → 🟠 HIGH finding: "Report has no Debug tab — users cannot self-diagnose stale data"
-   - Present but incomplete (missing freshness layers) → 🟡 MEDIUM finding
-2. **Model hints** — Do visible measures have descriptions with valid groupings documented?
-   - Missing on >50% of measures → 🟠 HIGH finding
-   - Missing on <50% → 🟡 MEDIUM finding
-3. **Page structure** — Does the tab order follow: content pages → Debug (last)?
-4. **Custom visuals** — Do any visuals in the report lack the blue Microsoft certification badge?
-   - Any uncertified custom visual → 🔴 CRITICAL finding: "Uncertified custom visual present — must be
-     replaced before publishing. Only Microsoft-certified visuals (blue checkmark) are approved."
-   - Certified paid visual → 🟡 MEDIUM note: "⚠️ Licensed visual — confirm org has active licence"
+Build modes generate artifacts. They are invoked directly by the user, or orchestrated by `dw-report-designer.agent.md` after a design spec is signed off. Detailed step-by-step instructions for each build mode are in `SKILL.md` Modes H–N — follow those instructions precisely. The summaries below describe when each mode applies.
 
-**When generating a new report structure**:
-1. Always include a Debug tab scaffold as the last page
-2. Generate the required DAX measures: `_Debug Oldest Source`, `_Debug Model Processed`,
-   `_Debug Data Age Hours`, `_Debug Staleness`
-3. Generate the DW-side infrastructure: `SSAS` freshness views plus `[Internal].[SSASProcessLog]`
-   if not already present
-4. Generate the SSAS model `_DataFreshness` hidden table M partition query
+### Mode H — DW Schema Scaffold
+**Trigger**: Design spec confirmed (from `dw-report-designer.agent.md`) OR user provides table requirements directly.
+**Generates**: SSDT-compatible SQL files for `Dimension`, `Fact`, `Staging`, `Internal` tables; post-deploy extended properties script; sensitivity classification statements.
+**Key rule**: All tables follow org naming — no `Dim`/`Fact`/`Stg` prefixes; surrogate key `{EntityName}Key`; natural keys `_Source{OriginalName}`; `LineageKey` on staging tables.
+**Full instructions**: `SKILL.md` → Mode H.
 
-**When recommending visuals** (Section 3 of `pbix-report-standards.md`):
-- Suggest built-in visuals first; if a custom visual is recommended, explicitly note that it must carry
-  the blue Microsoft certification badge in AppSource before use
-- Flag any paid visuals with a licensing cost warning
+---
 
-**When generating new measures**:
-- Always include a description following the template in `pbix-report-standards.md` Section 6
-- Include "Valid groupings:" and "Notes:" in every measure description
+### Mode I — SSAS Tabular Model Scaffold
+**Trigger**: DW schema confirmed (Mode H output or existing DW tables).
+**Generates**: TMDL files for all tables (sourced from `SSAS` schema views); relationship definitions; display folder structure; base measures with descriptions; `_Debug` table for Data Freshness tab.
+**Key rule**: Hidden `{EntityName}Key` columns; visible attributes in Title Case with spaces; always single-direction relationships unless bidirectional is explicitly justified.
+**Full instructions**: `SKILL.md` → Mode I.
 
-**When generating new tables in the SSAS model**:
-- Always include a description following the table template: grain, can/cannot group by,
-  SCD type, source reference
+---
+
+### Mode J — Source Stored Procedure Generation
+**Trigger**: New source tables identified in the spec.
+**Generates**: One `[Staging].[Load{EntityName}]` SP per staging entity; `Internal.Lineage` recording; org-standard `TRY/CATCH` + `SET NOCOUNT ON` + `SET XACT_ABORT ON`.
+**Key rule**: Source extracts stay raw — no business transformations before the DW load pattern. Salesforce sources use KingswaySoft SSIS connector, not SPs.
+**Full instructions**: `SKILL.md` → Mode J.
+
+---
+
+### Mode K — SSIS Catalog Configuration
+**Trigger**: New SSIS project or adding packages to an existing project.
+**Generates**: `ssis_catalog_configuration.json`; environment variable entries with `#{token}#` placeholders; 3-package parallel structure documentation.
+**Key rule**: `UsesDispositions='true'` for Salesforce; remove `System.` prefix from `Int32` data types in BIML if applicable.
+**Full instructions**: `SKILL.md` → Mode K.
+
+---
+
+### Mode L — DAX Measure Generation
+**Trigger**: SSAS model exists or is scaffolded (Mode I); measures list confirmed in spec.
+**Generates**: DAX expressions using SQLBI patterns; `Description`, `FormatString`, display folder; YTD / Prior Year / YoY Variance variants; TMDL definitions or a Tabular Editor 2 script to add to an existing model.
+**Key rule**: Always `DIVIDE()` not `/`; `VAR` for multi-step expressions; description must include "Valid groupings:" and "Notes:".
+**Full instructions**: `SKILL.md` → Mode L.
+
+---
+
+### Mode M — ADO Classic Pipeline Config Generation
+**Trigger**: New DW project being set up, or adding new deployment phases.
+**Generates**: 5-phase release pipeline task configuration (Classic format — not YAML); build pipeline 13-step sequence; variable group entries.
+**Key rule**: Always use Tabular Editor 2 (`TabularEditor.exe` at `E:\Tools\TabularEditor\`) — never TE3. Output Classic pipeline task format unless user explicitly requests YAML.
+**Full instructions**: `SKILL.md` → Mode M.
+
+---
+
+### Mode N — Full DW Scaffold (Orchestrated Build)
+**Trigger**: Signed-off spec from `dw-report-designer.agent.md` OR user requests end-to-end generation.
+**Generates**: All artifacts from Modes H–M in dependency order (H+J in parallel → I → L → K → M last).
+**Delivers**: Build summary listing every generated file with its target path, plus the next manual steps required.
+**Full instructions**: `SKILL.md` → Mode N.
 
 ---
 
