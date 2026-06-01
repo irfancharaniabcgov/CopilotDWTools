@@ -1,17 +1,17 @@
 # PBIRS Constraints & Best Practices
 
-> **Target Stack:** Power BI Report Server (on-prem), SSAS Tabular (on-prem, CL 1200–1600), SQL Server 2016–2022, Active Directory / Windows Authentication, Kerberos. No Power BI Service. No Azure. No Microsoft Fabric.
+> **Target Stack:** Power BI Report Server (on-prem), SSAS Tabular (on-prem, CL 1200ï¿½1600), SQL Server 2016ï¿½2022, Active Directory / Windows Authentication, Kerberos. No Power BI Service. No Azure. No Microsoft Fabric.
 
 **Deployed version:** Power BI Report Server May 2026 (v1.26.9637.31070, build 15.0.1121.109).  
 Update cadence: typically 1 major quarterly release behind latest.
 
 ---
 
-## 1. PBIRS vs. Power BI Service — Feature Comparison
+## 1. PBIRS vs. Power BI Service ï¿½ Feature Comparison
 
 | Feature | Cloud (PBI Service) | PBIRS (On-Prem) | Notes |
 |---|---|---|---|
-| Live connection to SSAS Tabular | ? (via gateway) | ? (direct) | PBIRS preferred on-prem — no gateway overhead |
+| Live connection to SSAS Tabular | ? (via gateway) | ? (direct) | PBIRS preferred on-prem ï¿½ no gateway overhead |
 | Import mode (.pbix) | ? | ? | Limited by PBIRS server RAM |
 | DirectQuery to SQL Server | ? | ? | |
 | Composite models | ? | ? | Not supported in PBIRS |
@@ -38,7 +38,7 @@ Update cadence: typically 1 major quarterly release behind latest.
 ## 2. Version Compatibility Matrix
 
 > **Critical:** A .pbix saved at a higher compatibility level than PBIRS supports will fail with a cryptic error.  
-> **Always use "Power BI Desktop optimised for Power BI Report Server"** — separate download from standard Desktop.  
+> **Always use "Power BI Desktop optimised for Power BI Report Server"** ï¿½ separate download from standard Desktop.  
 > Download: https://powerbi.microsoft.com/en-us/report-server/ ? "Advanced download options"
 
 | PBIRS Release | Version | Max .pbix Compat Level |
@@ -64,7 +64,7 @@ Update cadence: typically 1 major quarterly release behind latest.
 
 ---
 
-## 3. Live Connection — Hard Constraints
+## 3. Live Connection ï¿½ Hard Constraints
 
 | Constraint | Workaround |
 |---|---|
@@ -85,14 +85,14 @@ Fix: move import data into SSAS or use import mode entirely.
 
 ## 4. Report Design Best Practices
 
-- Treat Power BI Desktop as a **visualisation tool only** — all business logic belongs in the SSAS model.
+- Treat Power BI Desktop as a **visualisation tool only** ï¿½ all business logic belongs in the SSAS model.
 - New measure needed ? document spec ? SSAS developer adds to model ? redeploy ? report author refreshes field list ? republish. Maintain a **model change request log**.
 - Date slicers: bind to Calendar hierarchy from SSAS; never create a local date table in the report.
-- Hierarchies: drag SSAS-defined hierarchy onto rows/columns — do not re-build from individual columns.
+- Hierarchies: drag SSAS-defined hierarchy onto rows/columns ï¿½ do not re-build from individual columns.
 - Slicer sync: use View ? Sync Slicers for shared Calendar and Region slicers across pages.
 - Performance guard: use `IF(ISFILTERED(Calendar[CalendarYear]), 1, 0)` as visual-level filter on heavy visuals to prevent blank-page full scans.
-- Cross-report drillthrough: supported in PBIRS — target report ? Pages ? Drillthrough ? "Cross-report" ON.
-- Bookmarks: work as in Desktop — save filter/slicer/visibility state; stored inside .pbix.
+- Cross-report drillthrough: supported in PBIRS ï¿½ target report ? Pages ? Drillthrough ? "Cross-report" ON.
+- Bookmarks: work as in Desktop ï¿½ save filter/slicer/visibility state; stored inside .pbix.
 
 ---
 
@@ -134,7 +134,7 @@ Get-Item "IIS:\AppPools\PowerBIReportServer" | Select-Object processModel
 # processModel.userName must be CONTOSO\PBIRSServiceAccount
 ```
 
-**Step 5: Set PBIRS to Negotiate (Kerberos)** — edit `rsreportserver.config`:
+**Step 5: Set PBIRS to Negotiate (Kerberos)** ï¿½ edit `rsreportserver.config`:
 ```xml
 <Authentication>
   <AuthenticationTypes><RSWindowsNegotiate /></AuthenticationTypes>
@@ -170,6 +170,37 @@ Verify delegation in SSAS log: `msmdsrv.log` must show `EffectiveUserName=CONTOS
 | Network share (subscriptions) | Read/Write on delivery share |
 | Windows local server | Logon as service |
 
+### Org Standard: PBIRS Folder Permissions (AD Groups)
+
+PBIRS folder permissions use **Active Directory groups exclusively** â€” individual accounts are never granted folder access directly. The PBIRS folder hierarchy mirrors the project/department structure.
+
+**Standard two-role folder permission pattern (every BI project):**
+
+| PBIRS Role | AD Group pattern | Capability |
+|---|---|---|
+| `Browser` | `DL-BI-{ProjectName}-Read` | View and run reports in the folder |
+| `Publisher` | `DL-BI-{ProjectName}-Readwrite` | Upload, overwrite, and manage reports in the folder |
+
+- The `Content Manager` role (full folder admin) is reserved for the BI team service account and BI admins only â€” not granted to project-level groups
+- Folder structure in PBIRS must mirror the Git repository structure (e.g. `/Reports/{ProjectName}/`)
+- Access to the SSAS model (SSAS role membership) and access to the PBIRS folder (PBIRS role) are managed **independently** â€” a user needs both to view a live-connection report
+- The PBIRS service account (`svc-pbirs`) must have `Browser` access or a dedicated service role on every folder it deploys to
+
+**Example PowerShell â€” set folder Browser permission for an AD group:**
+```powershell
+$base = "http://pbirs-server/ReportServer/api/v2.0"
+$group = "CONTOSO\DL-BI-SalesProject-Read"
+$folderPath = "/Reports/SalesProject"
+
+$policy = @{
+    GroupUserName = $group
+    Roles = @(@{ Name = "Browser" })
+} | ConvertTo-Json -Depth 3
+
+Invoke-RestMethod "$base/Folders(Path='$([Uri]::EscapeDataString($folderPath))')/Policies" `
+    -Method PUT -Body $policy -ContentType "application/json" -UseDefaultCredentials
+```
+
 ---
 
 ## 6. Paginated Reports vs. Canvas Reports
@@ -184,7 +215,7 @@ Verify delegation in SSAS log: `msmdsrv.log` must show `EffectiveUserName=CONTOS
 | Scheduled email with formatted attachment | ?? PNG/PDF only | ? Excel/PDF/Word/CSV |
 | Historical trend / KPIs / dashboards | ? | ?? Limited |
 
-- **DAX dataset:** `EVALUATE SUMMARIZECOLUMNS(...)` against SSAS Tabular — use for all reports. This is the only dataset type used in this organisation (SSAS Tabular + DAX only; no MDX/Multidimensional).
+- **DAX dataset:** `EVALUATE SUMMARIZECOLUMNS(...)` against SSAS Tabular ï¿½ use for all reports. This is the only dataset type used in this organisation (SSAS Tabular + DAX only; no MDX/Multidimensional).
 
 **Drillthrough from canvas ? paginated report:**
 ```
@@ -200,7 +231,7 @@ URL Action = CONCATENATE(
 
 ## 7. Deployment and Versioning
 
-### REST API — Upload/Overwrite .pbix
+### REST API ï¿½ Upload/Overwrite .pbix
 
 ```powershell
 function Publish-PBIRSReport {
@@ -268,9 +299,9 @@ Invoke-RestMethod "$base/DataSources" -Method POST -Body $ds `
 
 | Root Cause | Diagnostic | Fix |
 |---|---|---|
-| Too many visuals per page | F12 Network — many parallel SSAS queries | Reduce visuals; bookmarks to hide off-screen visuals |
-| Heavy measures without aggregations | DAX Studio Server Timings — high FE time | Add user-defined aggregations; optimise DAX |
-| "Show All" slicers force full scans | SSAS query log — full dimension scans | Use dropdown slicer; reduce member count |
+| Too many visuals per page | F12 Network ï¿½ many parallel SSAS queries | Reduce visuals; bookmarks to hide off-screen visuals |
+| Heavy measures without aggregations | DAX Studio Server Timings ï¿½ high FE time | Add user-defined aggregations; optimise DAX |
+| "Show All" slicers force full scans | SSAS query log ï¿½ full dimension scans | Use dropdown slicer; reduce member count |
 | Large model not fitting in SSAS memory | SSAS memory counters (Perfmon/Process Explorer) | Increase max memory; remove unused columns |
 | Subscription concurrency hitting SSAS | Multiple subscribers simultaneously | Stagger schedules; increase SSAS thread pool |
 
@@ -291,8 +322,8 @@ PBIRS web portal ? Report ? Manage ? Processing Options ? "Render from execution
 
 | Component | Minimum | Recommended |
 |---|---|---|
-| PBIRS RAM | 8 GB | 16–32 GB |
-| PBIRS CPU | 4 cores | 8–16 cores |
-| SSAS RAM | 16 GB | 32–128 GB |
+| PBIRS RAM | 8 GB | 16ï¿½32 GB |
+| PBIRS CPU | 4 cores | 8ï¿½16 cores |
+| SSAS RAM | 16 GB | 32ï¿½128 GB |
 | SSAS CPU | 8 cores | 16+ cores |
 | Network PBIRS?SSAS | 1 Gbps | 10 Gbps |

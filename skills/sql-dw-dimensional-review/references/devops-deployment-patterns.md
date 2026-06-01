@@ -64,8 +64,10 @@ same five phases; only the linked variable values change.
 ```
 Release Pipeline: DW_Deploy
 |
-+-- Stage: Deploy to DEV / TEST / UAT / PROD
-|   +-- Phase 1: Deploy DW DB
++-- Stage: Deploy to DEV / TEST / UAT / PROD / SUPPORT
+|   (SUPPORT mirrors PROD configuration — used for production-support investigations
+|    without touching PROD; shares PROD variable values with a separate agent pool slot)
+|   +-- Phase 1: Deploy DW DB
 |   |   1. PowerShell: $(tool_create_sql_login)
 |   |   2. Command Line: $(sql_package_2019) publishes DW\Release\{ProjectName}.dacpac to $(dw_db_catalog)
 |   |   3. PowerShell: $(tool_run_sql_file) runs loadStaging.sql against source DB $(db_catalog)

@@ -333,6 +333,32 @@ On-premises SSAS uses **Windows Authentication exclusively**.
 
 **Role membership:** Add AD groups (not individual users) via SSMS: `Roles → [Role] → Membership → Add`
 
+### Org Standard: AD Groups and Role Structure
+
+This organisation uses **Active Directory groups exclusively** for role membership — individual user accounts are never added directly to SSAS roles or PBIRS folder permissions. All access is managed through AD group membership.
+
+**Standard SSAS role pattern (every BI project must have at least these two):**
+
+| Role | Permission | AD Group pattern | Purpose |
+|---|---|---|---|
+| `{ProjectName} Consumers` | `Read` | `DL-BI-{ProjectName}-Read` | Report consumers — browser-level access |
+| `{ProjectName} Authors` | `Read + Process` | `DL-BI-{ProjectName}-Readwrite` | Report authors and developers — can trigger model refresh |
+
+- Row-Level Security (RLS) is applied within the **Consumers** role using `USERPRINCIPALNAME()`
+- Authors typically bypass RLS (reviewers/developers need full data) — apply `CUSTOMDATA` or a separate admin role if needed
+- Additional roles (e.g. regional data partitions, executive subsets) may be added, but the two-role baseline is mandatory
+- The PBIRS service account must be a member of the Consumers role (minimum) or a dedicated service role
+
+**TMDL role template (org standard):**
+```tmdl
+role '{ProjectName} Consumers'
+    modelPermission: read
+    // RLS table permissions go here if required
+
+role '{ProjectName} Authors'
+    modelPermission: readRefresh
+```
+
 ---
 
 ## SSAS Processing Strategies

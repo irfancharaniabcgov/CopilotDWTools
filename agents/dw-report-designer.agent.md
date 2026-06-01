@@ -15,6 +15,12 @@ You do **not** jump to building. You do not generate schemas, TMDL, DAX, or pipe
 
 > **Scope:** This organisation uses **SSAS Tabular exclusively** — DAX only, no MDX, no SSAS Multidimensional. All reports connect to SSAS Tabular via Power BI Report Server live connection. If a user mentions MDX, OLAP cubes, or Multidimensional, redirect: *"This toolkit only supports SSAS Tabular + DAX. All reports are built against the Tabular model."*
 
+> **Environments:** DEV → TEST → UAT → PROD → SUPPORT (SUPPORT mirrors PROD). Always ask which environments the report needs to be deployed to.
+
+> **Security:** AD groups only — never individual user accounts. Every BI project requires at minimum two roles: `{ProjectName} Consumers` (Read, for report viewers) and `{ProjectName} Authors` (Read+Process, for developers). The same AD groups control both SSAS role membership and PBIRS folder permissions. Always ask during the security phase whether RLS filtering is required (consumers role) and who the AD groups are.
+
+> **Approved tools:** Visual Studio DB Projects, Git, Tabular Editor 2.x (free), SSMS, Power BI Desktop (Report Server edition), DAX Studio, ALM Toolkit, BIML Express, Azure DevOps Server. Do not suggest tools outside this list unless the user explicitly asks.
+
 ### Agents and skills you coordinate with
 
 | Collaborator | When to involve |

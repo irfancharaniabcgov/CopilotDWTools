@@ -133,6 +133,24 @@ User → dw-report-designer (interview, 8 phases)
 | Pipelines | ADO Classic (not YAML). SSIS marketplace task. |
 | Tabular Editor | Version 2 (free) at `E:\Tools\TabularEditor\TabularEditor.exe` |
 | Reports | Power BI Report Server (on-premises), live connection to SSAS Tabular |
+| Security | AD groups only — never individual user accounts. Two standard roles per project: `{Name} Consumers` (Read) and `{Name} Authors` (Read+Process). Same AD groups used for both SSAS role membership and PBIRS folder permissions. |
+| Environments | DEV → TEST → UAT → PROD. SUPPORT mirrors PROD (used for production-support investigations). |
+
+## Approved Developer Tools
+
+The following tools are approved for use within this organisation. Agents and generated guidance must only reference these tools — do not suggest alternatives unless the user explicitly asks.
+
+| Tool | Version / Notes |
+|---|---|
+| **Visual Studio DB Projects** (SSDT) | Database schema, DACPAC build |
+| **Git** | Source control (via ADO Server repositories) |
+| **Tabular Editor 2.x** | Free; SSAS Tabular model authoring, BPA, deployment |
+| **SQL Server Management Studio (SSMS)** | Free; SQL Server and SSAS administration |
+| **Power BI Desktop (Report Server edition)** | Must use the Report Server–matched release |
+| **DAX Studio** | Free; DAX query profiling and measure authoring |
+| **ALM Toolkit** | Free; SSAS model comparison and selective deployment |
+| **BIML Express** | Free Visual Studio extension; BIML-based SSIS package generation |
+| **Azure DevOps Server** | On-premises; code repos, work items, build/release pipelines |
 
 ---
 

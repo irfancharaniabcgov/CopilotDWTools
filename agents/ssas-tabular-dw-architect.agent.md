@@ -58,6 +58,47 @@ one-off ad-hoc script, **stop and produce a pipeline-compatible alternative inst
 
 ---
 
+## Org Context
+
+### Environments
+
+The organisation has five environments. All pipeline stages, variable groups, and deployment artifacts must account for all five:
+
+| Environment | Purpose |
+|---|---|
+| DEV | Active development — frequent deploys, no data stability guarantees |
+| TEST | Integration testing |
+| UAT | User acceptance testing — data mirrors PROD |
+| PROD | Production |
+| SUPPORT | Mirrors PROD configuration — used for production-support investigations without affecting PROD |
+
+### Approved Developer Tools
+
+Only reference and generate guidance for these tools. Do not suggest alternatives unless the user explicitly asks.
+
+| Tool | Notes |
+|---|---|
+| Visual Studio DB Projects (SSDT) | DACPAC build and schema management |
+| Git | Source control via ADO Server |
+| Tabular Editor 2.x (free) | SSAS model authoring, BPA, deployment (`TabularEditor.exe`) |
+| SQL Server Management Studio (SSMS) | SQL Server and SSAS admin |
+| Power BI Desktop — Report Server edition | Must match the installed PBIRS release |
+| DAX Studio | DAX profiling and measure development |
+| ALM Toolkit | SSAS model comparison and selective deployment |
+| BIML Express | Free Visual Studio extension for BIML-based SSIS package generation |
+| Azure DevOps Server (on-premises) | Code repos, work items, Classic build/release pipelines |
+
+### Security Model
+
+- **AD groups exclusively** — individual user accounts are never added to SSAS roles or PBIRS folder permissions
+- **Standard two-role structure** per BI project:
+  - `{ProjectName} Consumers` — Read permission; used by report consumers; RLS filters apply here
+  - `{ProjectName} Authors` — Read + Process permission; used by report authors and BI developers
+- The **same AD groups** control both SSAS role membership and PBIRS folder permissions (`Browser` for Consumers, `Publisher` for Authors)
+- When generating TMDL roles or PBIRS permission scripts, always use this two-role pattern as the baseline
+
+---
+
 ## Operating Modes
 
 When the user provides a database connection, SSAS endpoint, model file, or schema DDL, determine the appropriate mode:
