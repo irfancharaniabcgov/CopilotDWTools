@@ -947,3 +947,67 @@ WHERE [PROPERTY_NAME] IN ('ProductVersion','DefaultCompatibilityLevel','MemoryLi
 | 18 | Model has no perspectives | Low | Add at least one perspective per subject area |
 | 19 | NULL FK values in source DW tables | High | Use `-1` Unknown surrogate key; NULL breaks SSAS relationship integrity |
 | 20 | SSAS service account not in local Administrators | Low | SSAS service account needs `Log on as a service` and access to backup paths |
+
+
+---
+
+## SSAS Schema View Contract
+
+### Purpose
+The `SSAS` schema in the DW database contains SQL views only. These views are the sole source of data for SSAS Tabular table partitions. No SSAS partition should query a `Dimension`, `Fact`, or `Staging` table directly.
+
+### Naming convention
+- View name matches the SSAS table name exactly: `SSAS.Calendar`, `SSAS.Customer`, `SSAS.SalesTransaction`
+- No prefixes (not `vw_Calendar`, not `v_Calendar`)
+
+### Column alias rules (enforced)
+1. **Every column must have an alias** — no bare column references
+2. **Aliases use Title Case with spaces** — this becomes the SSAS attribute name visible to report users
+3. **Surrogate key alias**: `{EntityName} Key` (with space) — e.g. `CustomerKey AS [Customer Key]`
+4. **Natural key alias**: `{Entity} Source ID` — e.g. `_SourceCustomerID AS [Customer Source ID]`
+5. **Boolean flags**: readable phrase — e.g. `IsActive AS [Is Active]`, `IsHoliday AS [Is Holiday]`
+6. **Date columns**: include unit if ambiguous — e.g. `CreatedDate AS [Created Date]`, not just `[Created]`
+
+### No business logic in SSAS views
+SSAS views must be pure projections — no CASE expressions, no computed columns, no joins. All transformations belong in the dimension/fact load SPs. If a column is needed in SSAS but doesn't exist in the underlying table, add it to the DW table and load SP first.
+
+### Surrogate and natural key exposure
+- Surrogate key (`{EntityName}Key`) — **always include, alias as `[{Entity} Key]`** — required for SSAS relationships
+- Natural key (`_Source{OriginalName}`) — **include for traceability, alias as `[{Entity} Source {OriginalName}]`** — hide in SSAS model (used for drill-through only)
+- Both must be present; hiding happens in the SSAS model, not by omitting from the view
+
+### Example view
+```sql
+CREATE VIEW [SSAS].[Customer]
+AS
+SELECT
+    CustomerKey             AS [Customer Key],
+    _SourceCustomerID       AS [Customer Source ID],
+    FullName                AS [Customer Name],
+    EmailAddress            AS [Email Address],
+    Region                  AS [Region],
+    Country                 AS [Country],
+    PostCode                AS [Post Code],
+    IsActive                AS [Is Active],
+    CreatedDate             AS [Created Date]
+FROM [Dimension].[Customer];
+GO
+```
+
+### Partition configuration in SSAS
+Each SSAS table has a single partition pointing to its SSAS view:
+- Data source: the DW database connection (named `{ProjectName}DW` in SSAS)
+- Query: `SELECT * FROM [SSAS].[{TableName}]`
+- Partition name: `{TableName}_Full` for full-load tables; `{TableName}_{Year}` for year-partitioned facts
+
+### Review checklist (Mode A — DW Schema Review)
+When reviewing SSAS views, check:
+
+| Check | Severity if failed |
+|---|---|
+| Every SSAS table has a corresponding `SSAS` schema view | 🔴 CRITICAL |
+| All column aliases use Title Case with spaces | 🟠 HIGH |
+| No business logic (CASE, computed expressions) in view | 🟠 HIGH |
+| Surrogate key included and aliased correctly | 🔴 CRITICAL |
+| Natural key included (for traceability) | 🟡 MEDIUM |
+| No direct partition query on Dimension/Fact table | 🟠 HIGH |

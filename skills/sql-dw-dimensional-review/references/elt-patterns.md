@@ -635,6 +635,34 @@ CREATE TABLE [Internal].[LastUpdatedSource] (
 );
 ```
 
+### Internal.Lineage — DDL and Lifecycle
+
+```sql
+CREATE TABLE [Internal].[Lineage]
+(
+    LineageKey      INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Lineage PRIMARY KEY,
+    PackageName     NVARCHAR(255)     NOT NULL,
+    PackagePath     NVARCHAR(1000)    NULL,
+    StartTime       DATETIME2(0)      NOT NULL CONSTRAINT DF_Lineage_StartTime DEFAULT SYSUTCDATETIME(),
+    EndTime         DATETIME2(0)      NULL,
+    RowsLoaded      INT               NULL,
+    Status          NVARCHAR(20)      NOT NULL CONSTRAINT DF_Lineage_Status DEFAULT 'Running',
+    ErrorMessage    NVARCHAR(MAX)     NULL,
+    EnvironmentName NVARCHAR(50)      NULL    -- populated from SSISDB environment variable 'EnvironmentName'
+);
+```
+
+Lifecycle:
+1. **On package start** (Execute SQL Task, first step): `INSERT INTO [Internal].[Lineage] (PackageName, PackagePath, EnvironmentName) OUTPUT INSERTED.LineageKey INTO ?` — captures LineageKey into a package variable `User::LineageKey`
+2. **On staging load** (Data Flow Task, OLE DB Destination): set `LineageKey` column from `User::LineageKey` — every staging row gets the LineageKey of the package run that loaded it
+3. **On package success** (Execute SQL Task, last step): `UPDATE [Internal].[Lineage] SET EndTime = SYSUTCDATETIME(), Status = 'Success', RowsLoaded = ? WHERE LineageKey = ?`
+4. **On package failure** (Event Handler → OnError): `UPDATE [Internal].[Lineage] SET EndTime = SYSUTCDATETIME(), Status = 'Failed', ErrorMessage = ? WHERE LineageKey = ?`
+
+LineageKey FK convention:
+- Every `Staging` table must have a `LineageKey INT NULL` column (nullable to allow manual loads)
+- No `LineageKey` column on `Dimension` or `Fact` tables — lineage is tracked at the staging load level only
+- Do NOT add `ETLBatchID`, `LoadDate`, or any other audit column pattern — `Internal.Lineage` + `Staging.LineageKey` is the only approved audit pattern
+
 ### Getting and Advancing the Date Window
 
 ```sql
@@ -907,3 +935,50 @@ WHERE [Status] = N'P'
 - James Serra: [Starting Your First Data Warehouse — A Practical Learning Guide](https://www.jamesserra.com/archive/2025/11/starting-your-first-data-warehouse-a-practical-learning-guide/)
 - Kimball Group: *The Data Warehouse Toolkit, 3rd Edition* (Chapter 22: ETL Subsystems)
 - Microsoft: [SQL Server Change Data Capture](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-data-capture-sql-server)
+
+---
+
+## SSIS Package Implementation Standards
+
+### Package structure
+Each SSIS package follows a three-container layout:
+1. **Pre-load validation** (Sequence Container): row count check on source; abort if 0 rows and expected > 0
+2. **Data flow** (Data Flow Task): source → transformations → staging OLE DB destination
+3. **Post-load** (Sequence Container): update `Internal.Lineage` success record; optionally invoke load SP via Execute SQL Task
+
+### Connection manager naming
+- Naming pattern: `{SystemName}_{DatabaseName}` — e.g. `DW_DW`, `Source_Payroll`, `Source_HR`
+- Connection strings are NOT hardcoded — all connection strings set from SSISDB environment variables at runtime
+- Environment variable naming: `{DataSourceName}ConnectionString` — e.g. `DWConnectionString`, `PayrollConnectionString`
+- Connection managers use parameterisation: `@[$Project::DWConnectionString]`
+
+### BIML Express patterns
+For packages with many similar tables, use BIML Express (Visual Studio extension) to generate packages from metadata:
+- Define source/target table mappings in a metadata table or XML config
+- Use BIML script to generate one `.dtsx` per source table
+- Regenerate packages when schema changes — do not manually edit generated packages
+- Keep BIML scripts in a `/BIML` folder within the SSIS project
+
+### Variable naming conventions
+| Variable | Scope | Purpose |
+|---|---|---|
+| `User::LineageKey` | Package | Lineage row PK from INSERT OUTPUT |
+| `User::RowsLoaded` | Package | Count written to Lineage on success |
+| `User::EnvironmentName` | Package | From SSISDB env — DEV/TEST/UAT/PROD/SUPPORT |
+| `User::ErrorMessage` | Package | Captured in OnError event handler |
+
+### Error handling
+- Every package has an `OnError` event handler at the package level
+- Event handler calls `Staging.RecordLineageFailure` SP (or inline Execute SQL Task) to update `Internal.Lineage`
+- Never suppress errors — all errors bubble to event handler and are recorded
+
+### Review checklist (Mode F — ELT Pipeline Review)
+| Check | Severity if failed |
+|---|---|
+| Every staging table has `LineageKey INT NULL` column | 🟠 HIGH |
+| `Internal.Lineage` INSERT on package start | 🟠 HIGH |
+| `Internal.Lineage` UPDATE on success/failure | 🟠 HIGH |
+| No hardcoded connection strings | 🔴 CRITICAL |
+| OnError event handler present at package level | 🟠 HIGH |
+| Connection managers use SSISDB env variable parameterisation | 🔴 CRITICAL |
+| BIML used for bulk-similar packages | 🟡 MEDIUM |

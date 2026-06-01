@@ -922,3 +922,98 @@ WHERE NOT EXISTS (
     WHERE dc._SourceCustomerID = s._SourceCustomerID AND dc.IsCurrent = 1
 );
 ```
+
+## Snapshot Schema Patterns
+
+### Purpose
+The `Snapshots` schema stores periodic and accumulating snapshots — fact table variants that record state at a point in time rather than individual transactions. Use this schema when reports need to track status changes over time (e.g. project status at end of each week, ticket status per day).
+
+Org schema: `Snapshots` — tables live here, not in `Fact`.
+
+### Snapshot types
+
+#### Periodic snapshot
+Records the state of a measurable entity at regular intervals (daily, weekly, monthly). Use when:
+- Users want to compare values at two points in time
+- Trend analysis is needed over a fixed grain
+
+```sql
+CREATE TABLE [Snapshots].[ProjectStatusWeekly]
+(
+    -- Degenerate dimensions (snapshot context)
+    SnapshotDateKey         INT           NOT NULL,   -- FK to Dimension.Calendar (end of week date)
+    ProjectKey              INT           NOT NULL,   -- FK to Dimension.Project
+    StatusKey               INT           NOT NULL,   -- FK to Dimension.ProjectStatus
+    -- Measures (state at snapshot date)
+    PercentComplete         DECIMAL(5,2)  NULL,
+    PlannedHours            DECIMAL(10,2) NULL,
+    ActualHours             DECIMAL(10,2) NULL,
+    RemainingHours          DECIMAL(10,2) NULL,
+    -- Audit
+    LineageKey              INT           NULL        -- FK to Internal.Lineage (snapshot load run)
+);
+```
+
+Load pattern: SPs named `Snapshots.Load{Entity}{Frequency}` — e.g. `Snapshots.LoadProjectStatusWeekly`
+
+#### Accumulating snapshot
+Records the complete lifecycle of a process (e.g. order fulfilment: ordered → picked → shipped → delivered). Each row is updated as the process progresses. Use when:
+- A business process has a defined set of milestones
+- Users want to report on lag between milestones
+
+```sql
+CREATE TABLE [Snapshots].[OrderFulfilment]
+(
+    -- Natural key (not surrogate — row is updated, not inserted)
+    OrderID                 INT           NOT NULL,
+    -- Milestone date keys (FK to Dimension.Calendar; -1 = not yet reached)
+    OrderDateKey            INT           NOT NULL,
+    PickedDateKey           INT           NOT NULL,
+    ShippedDateKey          INT           NOT NULL,
+    DeliveredDateKey        INT           NOT NULL,
+    -- Dimension FKs (current state)
+    CustomerKey             INT           NOT NULL,
+    ProductKey              INT           NOT NULL,
+    StatusKey               INT           NOT NULL,   -- current status
+    -- Lag measures (computed on load, stored for performance)
+    DaysToPickup            INT           NULL,       -- PickedDateKey - OrderDateKey
+    DaysToShip              INT           NULL,
+    DaysToDeliver           INT           NULL,
+    -- Audit
+    LastUpdatedLineageKey   INT           NULL
+);
+```
+
+Load pattern: SPs named `Snapshots.Load{Entity}` — use MERGE to update existing rows or INSERT new ones.
+
+### Key differences from Fact tables
+
+| | Fact | Snapshots (Periodic) | Snapshots (Accumulating) |
+|---|---|---|---|
+| Insert/Update | Insert only | Insert only | UPDATE existing rows |
+| Row represents | A transaction event | State at a date | A business process lifecycle |
+| Date keys | 1 (event date) | 1 (snapshot date) | Multiple milestone dates |
+| Schema | `Fact` | `Snapshots` | `Snapshots` |
+| Load SP | `Fact.Load{Entity}` | `Snapshots.Load{Entity}{Freq}` | `Snapshots.Load{Entity}` |
+| Unknown member | Yes (for all FKs) | Yes | -1 for unreached milestones |
+
+### SSAS representation
+- Periodic snapshots: exposed as a separate SSAS table via `SSAS.{Name}` view — same rules as fact SSAS views
+- Accumulating snapshots: each milestone date key gets its own relationship to `Calendar` — use inactive relationships activated with `USERELATIONSHIP()` in DAX measures:
+
+```dax
+Orders Shipped This Period =
+CALCULATE(
+    COUNTROWS( 'Order Fulfilment' ),
+    USERELATIONSHIP( 'Order Fulfilment'[Shipped Date Key], 'Calendar'[Date Key] )
+)
+```
+
+### Review checklist (Mode A)
+| Check | Severity if failed |
+|---|---|
+| Snapshots schema used (not Fact) for periodic/accumulating | 🟡 MEDIUM |
+| Accumulating snapshot uses MERGE (not INSERT only) | 🟠 HIGH |
+| Unreached milestone date keys use -1 (not NULL or 0) | 🟠 HIGH |
+| SSAS views follow Title Case alias rules | 🟠 HIGH |
+| Inactive relationships + USERELATIONSHIP() for multi-date accumulating | 🟡 MEDIUM |

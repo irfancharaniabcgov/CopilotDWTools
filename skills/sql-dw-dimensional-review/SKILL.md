@@ -208,18 +208,115 @@ Activate when the user asks to:
 **Reference**: `devops-deployment-patterns.md` for all pipeline configuration patterns and PowerShell standards
 
 ### Mode N: Full DW Scaffold (Orchestrated Build)
-**Trigger**: Signed-off spec from dw-report-designer OR user requests end-to-end generation
-**Input**: Complete design specification document
-**Process**: Execute Modes H, I, J, K, L, M in dependency order:
-1. **Mode H + Mode J in parallel** — DW schema SQL files and source SPs are independent of each other
-2. **Mode I after Mode H** — SSAS TMDL scaffold needs DW tables defined first
-3. **Mode L after Mode I** — DAX measures need the SSAS model structure
-4. **Mode K after Mode H** — SSIS catalog configuration needs the DW server and database names
-5. **Mode M last** — ADO pipeline configuration needs all artifact names from all previous modes
 
-After all modes complete, produce a **build summary** listing:
-- Every generated file with its target path
-- Next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages to the project", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT")
+**Trigger:** User says "build everything for [project name]", "full build", or invokes Mode N explicitly. Also activated by a signed-off spec from `dw-report-designer.agent.md`.
+
+**Prerequisites:** The `dw-report-designer.agent.md` interview protocol must be completed first. The agent will have produced a requirements artifact containing: confirmed grain, confirmed dimensions, confirmed measures, report layout, and user sign-off. **Mode N must refuse to proceed without this artifact.**
+
+**Input:** Complete design specification document from the interview protocol.
+
+#### Dependency DAG (fixed execution order)
+
+Mode N executes build modes in this order. Each step must complete and be validated before the next starts. (Mode-letter mapping reflects this skill's actual modes: H=DW Schema, J=Source SPs, K=SSIS Catalog, I=SSAS Tabular, L=DAX, M=ADO Pipeline.)
+
+```
+1. Mode H  — DW Schema Scaffold (Dimension/Fact/Staging/Internal tables)
+              ↓ (produces: DW + Staging CREATE TABLE scripts, SSAS schema views)
+2. Mode J  — Source Stored Procedure Generation
+              ↓ (produces: Staging.Load*, Dimension.Load*, Fact.Load* SPs)
+3. Mode K  — SSIS Catalog Configuration
+              ↓ (produces: ssis_catalog_configuration.json, package structure docs)
+4. Mode I  — SSAS Tabular Model Scaffold
+              ↓ (produces: TMDL source files, relationships, hidden keys, _Debug table)
+5. Mode L  — DAX Measure Generation
+              ↓ (produces: measures with Description, FormatString, DisplayFolder)
+6. Mode M  — ADO Classic Pipeline Config Generation
+              ↓ (produces: 5-phase release pipeline, build pipeline, variable groups)
+```
+
+Modes H and J may run in parallel where outputs are independent (source SP extraction is decoupled from DW table DDL). All other steps are strictly sequential. **No step may be skipped.** If a prerequisite step output is missing, Mode N halts and reports which step failed.
+
+#### Artifact handoffs between modes
+
+Each mode produces a named artifact that the next mode consumes:
+
+| Producer | Artifact | Consumer |
+|---|---|---|
+| Mode H | `{Project}_DW_Schema.sql` (Dimension + Fact + Staging tables) | Mode J (SPs reference these tables) |
+| Mode H | `{Project}_SSAS_Views.sql` (in `SSAS` schema) | Mode I (partition source view names) |
+| Mode H | `{Project}_Staging_Schema.sql` | Mode J (SPs load staging entities) |
+| Mode J | `{Project}_LoadSPs.sql` | Mode K (SSIS packages call these SPs) |
+| Mode J | `{Project}_LoadSPs.sql` | Mode I (SSAS partition queries hit DW tables loaded by SPs) |
+| Mode K | `ssis_catalog_configuration.json` | Mode M (pipeline deploys SSIS project + configures catalog) |
+| Mode I | `{Project}_TMDL/` | Mode L (measures added to this model) |
+| Mode L | Updated `{Project}_TMDL/` | Mode M (deployed via TE2 CLI) |
+| Mode M | `{Project}_Pipeline.md` | User review |
+
+#### Idempotency rules
+
+All generated scripts must be idempotent:
+
+- **Tables**: `IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE ...) CREATE TABLE ...`
+- **Views**: `CREATE OR ALTER VIEW ...`
+- **Stored procedures**: `CREATE OR ALTER PROCEDURE ...`
+- **Extended properties**: `IF EXISTS ... sp_updateextendedproperty ELSE sp_addextendedproperty` upsert
+- **SSAS model**: deploy with ALM Toolkit / Tabular Editor 2 delta deployment — **not** full replace unless explicitly requested
+- **Pipeline tasks**: must be re-runnable without state corruption
+
+#### Validation gate between each step
+
+After each mode completes, run the corresponding validation before proceeding:
+
+- **After Mode H**: run Mode A (DW Schema Review) — must pass with no 🔴 CRITICAL findings; verify `LineageKey INT NULL` column present on staging tables
+- **After Mode J**: verify SP names follow `Schema.Load{Entity}` convention; no `SELECT *` in SPs; `SET NOCOUNT ON` and `SET XACT_ABORT ON` present; `TRY/CATCH` with `Internal.RethrowError` present
+- **After Mode K**: verify `ssis_catalog_configuration.json` parses; all required environment variables present (`ssis_param_LoadType`, `ssis_param_SourceDB`, `ssis_param_SourceServer`, `ssis_param_TargetDB`, `ssis_param_TargetServer`); token placeholders use `#{...}#` format
+- **After Mode I**: verify TMDL parses (`TabularEditor.exe ... --check-for-errors`); all relationships defined; `[Last Processed {TableName}]` and `[_Debug]` table present
+- **After Mode L**: run Mode D (DAX Review) — must pass with no 🔴 CRITICAL findings; every measure has `Description`, `FormatString`, and `DisplayFolder`
+- **After Mode M**: verify pipeline Classic task stubs are syntactically valid; all PowerShell follows `devops-deployment-patterns.md` Section 7 (`[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`)
+
+If a validation gate fails, Mode N:
+
+1. Reports the failing check(s) with severity
+2. Fixes the issue in the producing step
+3. Re-runs the validation gate
+4. Does **NOT** proceed to the next step until the gate passes
+
+#### Output format
+
+At the end of a successful Mode N run, produce a delivery summary:
+
+```
+## Mode N — Delivery Summary
+
+### {Project Name}
+
+| Artifact | Status | File / Location |
+|---|---|---|
+| DW Schema | ✅ Created | {Project}_DW_Schema.sql |
+| SSAS Views | ✅ Created | {Project}_SSAS_Views.sql |
+| Staging Schema | ✅ Created | {Project}_Staging_Schema.sql |
+| Load SPs | ✅ Created | {Project}_LoadSPs.sql |
+| SSIS Catalog Config | ✅ Scaffolded | ssis_catalog_configuration.json |
+| SSAS Model (TMDL) | ✅ Scaffolded | {Project}_TMDL/ |
+| DAX Measures | ✅ Created | in TMDL |
+| ADO Pipeline | ✅ Scaffolded | {Project}_Pipeline.md |
+
+### Validation results
+- Mode A (DW Schema Review): ✅ No CRITICAL findings
+- Mode D (DAX Review): ✅ No CRITICAL findings
+- TMDL parse check (TE2 --check-for-errors): ✅ Pass
+- Pipeline PowerShell standards check: ✅ Pass
+
+### Next steps for developer
+1. Review generated scripts in DEV environment
+2. Deploy DW schema via SSDT publish to DEV
+3. Open the SSIS project in Visual Studio and add the generated packages
+4. Run SSIS packages against DEV source to populate staging
+5. Execute load SPs in dependency order (Staging → Dimension → Fact)
+6. Deploy SSAS model to DEV via Tabular Editor 2 CLI
+7. Verify in DAX Studio (connect to DEV SSAS)
+8. Promote to UAT via ADO Classic pipeline
+```
 
 ## Output Standards
 

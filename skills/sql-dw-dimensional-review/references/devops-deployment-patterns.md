@@ -772,3 +772,84 @@ TabularEditor/
 
 `BPARules.json` is managed as part of the shared TabularEditor package so every project uses the
 same analyzer rules when the build pipeline runs the Best Practices Analyzer.
+
+---
+
+## ALM Toolkit Workflow
+
+### Purpose
+ALM Toolkit (free, https://alm-toolkit.com) is used for schema-only SSAS Tabular model comparisons and deployments. Unlike Tabular Editor deploy (which always does a full metadata replace), ALM Toolkit identifies delta changes and can deploy only what changed — reducing processing requirements and deployment risk.
+
+### When to use ALM Toolkit vs Tabular Editor deploy
+| Scenario | Tool |
+|---|---|
+| Initial model deployment (new model) | Tabular Editor 2 CLI (`-D` flag) |
+| Full metadata replace (overwrite everything) | Tabular Editor 2 CLI (`-D` flag) |
+| Schema-only delta deployment (add/modify measures, columns) | ALM Toolkit |
+| Promoting a model from DEV → TEST with structural changes | ALM Toolkit |
+| Checking what changed between two model versions | ALM Toolkit (compare only) |
+| Partition management | SSMS or SQL Agent job (separate from model deploy) |
+
+### ALM Toolkit comparison modes
+1. **File vs Server**: compare a `.bim` file (artifact) to a live SSAS instance — used in release pipelines
+2. **Server vs Server**: compare DEV SSAS to TEST SSAS directly — used for drift detection
+3. **File vs File**: compare two `.bim` artifacts — used for code review / diff
+
+### Release pipeline integration (ADO Classic)
+ALM Toolkit does not have a native ADO task. The approved pattern uses PowerShell:
+
+```powershell
+# ALM Toolkit comparison and deployment via PowerShell
+# Requires ALM Toolkit installed on the build agent at E:\Tools\ALMToolkit\
+
+$almExe    = "E:\Tools\ALMToolkit\ALMToolkit.exe"
+$sourceBim = "$(artifact_dir)\$(ssas_db).bim"
+$targetAS  = "$(sass_server)"   # Note: sass_server is intentional historical variable name
+$targetDB  = "$(ssas_db)"
+
+# Generate comparison script (no deployment yet)
+& $almExe -s $sourceBim -t "Provider=MSOLAP;Data Source=$targetAS;Initial Catalog=$targetDB" `
+          -script "$(artifact_dir)\delta.xmla" -o
+
+# Review $(artifact_dir)\delta.xmla in pipeline log (optional)
+
+# Apply the delta
+Invoke-ASCmd -Server $targetAS -Database $targetDB `
+             -InputFile "$(artifact_dir)\delta.xmla"
+```
+
+Note: `$(sass_server)` is the intentional historical variable name — do not correct to `ssas_server`.
+
+### Drift detection (Server vs Server)
+Run this check as part of the DEV → TEST promotion gate to detect configuration drift:
+
+```powershell
+# Compare DEV to TEST and fail pipeline if structural differences exist
+$almExe = "E:\Tools\ALMToolkit\ALMToolkit.exe"
+
+& $almExe -s "Provider=MSOLAP;Data Source=$(sass_server_dev);Initial Catalog=$(ssas_db)" `
+          -t "Provider=MSOLAP;Data Source=$(sass_server_test);Initial Catalog=$(ssas_db)" `
+          -script "$(artifact_dir)\drift.xmla" -o
+
+if ((Get-Content "$(artifact_dir)\drift.xmla") -match "alter|create|delete") {
+    Write-Host "##vso[task.logissue type=warning]Structural drift detected between DEV and TEST"
+}
+```
+
+### Options to preserve during deployment
+When deploying with ALM Toolkit, always preserve:
+- **Partitions** — never overwrite; partition management is handled separately
+- **Role memberships** — AD group assignments are environment-specific; overwriting deletes them
+- **Data sources** — connection strings are environment-specific
+
+In ALM Toolkit GUI: Options → Deployment → check "Retain Partitions", "Retain Role Members", "Retain Data Sources".
+In scripted mode: add `-RetainPartitions -RetainRoleMembers -RetainDataSources` flags (verify flag names match installed ALM Toolkit version).
+
+### Review checklist (Mode G — Deployment Review)
+| Check | Severity if failed |
+|---|---|
+| ALM Toolkit used for delta deployments (not always full replace) | 🟡 MEDIUM |
+| Partitions preserved during ALM Toolkit deployment | 🔴 CRITICAL |
+| Role memberships preserved during ALM Toolkit deployment | 🔴 CRITICAL |
+| Data sources preserved (not overwritten with DEV connection strings) | 🔴 CRITICAL |
+| Drift detection run before TEST/UAT promotion | 🟡 MEDIUM |

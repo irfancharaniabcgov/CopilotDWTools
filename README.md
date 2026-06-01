@@ -17,16 +17,23 @@ skills/
   sql-dw-dimensional-review/
     SKILL.md                           — Core skill entry point (Modes A–N)
     references/
-      kimball-patterns.md             — Kimball dimensional modeling + org naming conventions
+      kimball-patterns.md             — Kimball dimensional modeling + org naming conventions + snapshot patterns
       sqlbi-dax-patterns.md           — SQLBI/DAX Patterns (time intelligence, semi-additive, M2M, etc.)
-      ssas-tabular-bp.md              — SSAS Tabular best practices + BPA rules + DMV queries
+      ssas-tabular-bp.md              — SSAS Tabular best practices + BPA rules + SSAS schema view contract
       extended-properties-templates.md — sp_addextendedproperty T-SQL templates
       dw-review-checklist.md          — End-to-end DW/SSAS/PBIRS review checklist
-      elt-patterns.md                 — SSIS ELT patterns (KingswaySoft, incremental load, lineage)
-      devops-deployment-patterns.md   — ADO Classic pipeline configurations (build + release)
+      elt-patterns.md                 — SSIS ELT patterns + Internal.Lineage DDL + SSIS package standards
+      devops-deployment-patterns.md   — ADO Classic pipeline configurations + ALM Toolkit workflow
       pbirs-constraints.md            — Power BI Report Server constraints and design rules
       pbix-report-standards.md        — PBIX report standards (Debug tab, table descriptions, measure format)
       data-classification.md          — SQL sensitivity classification and data governance templates
+      ssdt-project-structure.md       — SSDT project layout, publish profiles, pre/post-deploy scripts
+      ssisdb-catalog-config.md        — SSISDB topology, environment variables, JSON config format
+      tabular-editor-2-automation.md  — TE2 CLI flags, C# scripts library, BPA rule JSON
+      ssas-deployment-processing.md   — TE2 deploy commands, processing modes, SQL Agent job pattern
+      dw-validation-patterns.md       — T-SQL validation queries (orphan facts, unknown members, reconciliation)
+      dax-style-guide.md              — DAX coding standard (naming, formatting, VAR/RETURN, anti-patterns)
+      dax-studio-workflow.md          — DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking workflow
 ```
 
 ---
