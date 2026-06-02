@@ -114,8 +114,8 @@ BEGIN
         [Date Key]                  DATE         NOT NULL,
 
         -- ── Integer surrogate / integer date representations ──────────────────────
-        [YYYYMMDD]                  INT          NULL,   -- 20240415
-        [YYYYMM]                    CHAR(6)      NULL,   -- '202404'
+        [YYYYMMDD]                  INT          NOT NULL,  -- 20240415
+        [YYYYMM]                    CHAR(6)      NOT NULL,  -- '202404'
 
         -- ── Standard calendar year/month/day ─────────────────────────────────────
         [Year]                      INT          NULL,
@@ -194,9 +194,9 @@ BEGIN
     MERGE [Dimension].[Calendar] AS [target]
     USING (
         VALUES
-            (CAST('1753-01-01' AS DATE)),  -- unknown (matches OLTP min sentinel)
-            (CAST('9999-12-31' AS DATE))   -- open/future
-    ) AS [source] ([Date Key])
+            (CAST('1753-01-01' AS DATE), 17530101, '175301'),  -- unknown (matches OLTP min sentinel)
+            (CAST('9999-12-31' AS DATE), 99991231, '999912')   -- open/future
+    ) AS [source] ([Date Key], [YYYYMMDD], [YYYYMM])
     ON [target].[Date Key] = [source].[Date Key]
     WHEN NOT MATCHED BY TARGET THEN
         INSERT ([Date Key], [YYYYMMDD], [YYYYMM],
@@ -218,11 +218,12 @@ BEGIN
                 [Is Stat Holiday], [Stat Holiday Name], [Is Pay Week])
         VALUES (
             [source].[Date Key],
+            [source].[YYYYMMDD], [source].[YYYYMM],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL, NULL
+            NULL, NULL, NULL, NULL, NULL
         );
 
     -- ── Main date range: 2000-01-01 through 2050-12-31 ─────────────────────────
