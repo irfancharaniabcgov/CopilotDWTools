@@ -59,7 +59,7 @@ The SSAS layer exposes `[ABC Category]` as a plain slicer attribute. No DAX requ
 
 #### Events in Progress → `Snapshots.ActiveEventsDaily` periodic snapshot
 
-Instead of `FILTER(ALL('Fact Events'), [Start Date Key] <= SelectedDate && ([End Date Key] >= SelectedDate || [End Date Key] = 0))`, load a daily snapshot:
+Instead of `FILTER(ALL('Fact Events'), [Start Date Key] <= SelectedDate && ([End Date Key] >= SelectedDate || [End Date Key] = -1))`, load a daily snapshot:
 
 ```sql
 -- Snapshots.LoadActiveEventsDaily — run nightly via SQL Agent
@@ -70,7 +70,7 @@ SELECT
     [other dimensions...]
 FROM Fact.Event
 WHERE StartDateKey <= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT)
-  AND (EndDateKey >= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) OR EndDateKey = 0);
+  AND (EndDateKey >= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) OR EndDateKey = -1);  -- -1 = still open (unknown member)
 ```
 
 The DAX measure becomes `COUNTROWS( 'Snapshots Active Events Daily' )` — simple and fast.
@@ -81,6 +81,7 @@ Instead of DAX dividing monthly budget by days-in-month, pre-spread during the f
 
 ```sql
 -- Fact.LoadBudgetAllocated — runs after source budget is loaded to staging
+-- Spreads over working days only; join filters to IsWorkingDay = 1 so divisor and row count match
 INSERT INTO Fact.BudgetAllocated (DateKey, DepartmentKey, CostCentreKey, BudgetAmount)
 SELECT
     c.DateKey,
@@ -89,7 +90,8 @@ SELECT
     b.MonthlyBudget / NULLIF(c.WorkingDaysInMonth, 0) AS BudgetAmount
 FROM Staging.Budget b
 JOIN Dimension.Calendar c
-    ON c.Year = b.BudgetYear AND c.MonthNumber = b.BudgetMonth;
+    ON c.Year = b.BudgetYear AND c.MonthNumber = b.BudgetMonth
+WHERE c.IsWorkingDay = 1;  -- one row per working day; divisor = WorkingDaysInMonth → totals sum correctly
 ```
 
 The DAX measure becomes `SUM( 'Fact Budget Allocated'[Budget Amount] )` — no division in DAX.

@@ -202,14 +202,14 @@ EVALUATE
 CALCULATETABLE(
     SUMMARIZECOLUMNS(
         'Product'[Product Name], 'Product'[Category],
-        Calendar[CalendarYear], Calendar[MonthName],
+        'Calendar'[Calendar Year], 'Calendar'[Month Name],
         "Total Sales", [Total Sales], "Total Cost", [Total Cost],
         "Gross Profit", [Gross Profit], "Units Sold", [Units Sold]
     ),
     Calendar[Date] >= DATE(@StartYear, @StartMonth, 1),
     Calendar[Date] <= EOMONTH( DATE( @EndYear, @EndMonth, 1 ), 0 )  -- EOMONTH handles months shorter than 31 days
 )
-ORDER BY Calendar[CalendarYear], Calendar[MonthName], 'Product'[Product Name]
+ORDER BY 'Calendar'[Calendar Year], 'Calendar'[Month Name], 'Product'[Product Name]
 
 -- Measure selector (@MeasureSelector: 1=Sales, 2=Cost, 3=Profit)
 EVALUATE CALCULATETABLE(
@@ -217,13 +217,13 @@ EVALUATE CALCULATETABLE(
         "Value", SWITCH( @MeasureSelector, 1, [Total Sales], 2, [Total Cost], 3, [Gross Profit], [Total Sales] ) ) )
 
 -- Cascading param: years with data
-EVALUATE SUMMARIZECOLUMNS( Calendar[CalendarYear], "HasData", CALCULATE( COUNTROWS( 'Fact Sales' ) ) )
-ORDER BY Calendar[CalendarYear] ASC
+EVALUATE SUMMARIZECOLUMNS( 'Calendar'[Calendar Year], "HasData", CALCULATE( COUNTROWS( 'Fact Sales' ) ) )
+ORDER BY 'Calendar'[Calendar Year] ASC
 
 -- Cascading: regions for selected year
 EVALUATE CALCULATETABLE(
     SUMMARIZECOLUMNS( 'Region'[Region Name], 'Region'[Region Key] ),
-    Calendar[CalendarYear] = @SelectedYear )
+    'Calendar'[Calendar Year] = @SelectedYear )
 ORDER BY 'Region'[Region Name]
 ```
 
