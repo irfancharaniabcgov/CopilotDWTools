@@ -67,6 +67,7 @@ Activate when the user asks to:
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
 | `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
 | `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning decision rules, physical design checklist, shared-instance considerations |
+| `references/dw-calendar-build.md` | Dimension.Calendar DDL + population SP (2000–2050, Apr–Mar fiscal, Sunday-start weeks), Dimension.StatHolidays table, SSAS.v_Calendar view (holiday + relative date columns), SSAS Tabular configuration notes |
 
 ## Operating Modes
 
