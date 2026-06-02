@@ -66,6 +66,7 @@ Activate when the user asks to:
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
 | `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
+| `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning decision rules, physical design checklist, shared-instance considerations |
 
 ## Operating Modes
 
@@ -152,10 +153,14 @@ Activate when the user asks to:
    - `Fact/Tables/{Name}.sql` — with `{Role}DateKey`, dimension `{EntityName}Key` FKs, measures, and schema-qualified references
    - `Staging/Tables/{Name}.sql` — with `{EntityName}Key IDENTITY`, business attributes, `_Source...` natural keys, and `LineageKey`
    - `Internal/Tables/` and `Internal/Stored Procedures/` — lineage/control objects when a new source is being added
-2. Generate post-deploy script for `sp_addextendedproperty` (call Mode C for each object)
-3. Generate `ADD SENSITIVITY CLASSIFICATION` statements for Protected columns (call Mode C from `data-classification.md`)
-4. Output as ready-to-add SSDT SQL files using the org schemas (`Dimension`, `Fact`, `Staging`, `Internal`, `SSAS`)
-**Conventions**: Follow naming from `elt-patterns.md` and `kimball-patterns.md`
+2. Apply index definitions from `dw-physical-design.md` for every generated table:
+   - Fact tables: CIX on DateKey + NCI on each FK column (FILLFACTOR 80%)
+   - Dimension tables: CIX on surrogate key + NCI on natural key; filtered NCI on `[Is Current Row] = 1` for SCD Type 2
+   - Staging tables: heap (no CIX); comment that post-load NCI on natural key should be added by the load SP if MERGE performance requires it
+3. Generate post-deploy script for `sp_addextendedproperty` (call Mode C for each object)
+4. Generate `ADD SENSITIVITY CLASSIFICATION` statements for Protected columns (call Mode C from `data-classification.md`)
+5. Output as ready-to-add SSDT SQL files using the org schemas (`Dimension`, `Fact`, `Staging`, `Internal`, `SSAS`)
+**Conventions**: Follow naming from `elt-patterns.md` and `kimball-patterns.md`; index naming from `dw-physical-design.md` Section 1
 
 ### Mode I: SSAS Tabular Model Scaffold
 **Trigger**: DW schema confirmed (Mode H output or existing DW tables)
@@ -343,6 +348,31 @@ At the end of a successful Mode N run, produce a delivery summary:
 7. Verify in DAX Studio (connect to DEV SSAS)
 8. Promote to UAT via ADO Classic pipeline
 ```
+
+---
+
+### Mode O: Physical Design Review
+
+**Trigger:** User says "review indexes", "physical design review", "check indexing", or invokes Mode O explicitly.
+**Input**: Live SQL Server connection (via ms-mssql.mssql MCP tools) OR user-pasted DDL / `sys.indexes` query output
+
+**Process:**
+1. Enumerate all tables in the DW database and classify as Fact / Dimension / Staging / Internal
+2. For each Fact table:
+   - Check for CIX on DateKey; flag missing CIX as 🔴 CRITICAL
+   - Check for NCI on each FK column; flag each missing NCI as 🟠 HIGH
+   - Check FILLFACTOR; flag 100% on append-loaded tables as 🟡 MEDIUM
+   - Check row count; if > 1M rows flag CCI consideration as 🔵 LOW
+3. For each Dimension table:
+   - Check for CIX on surrogate key; flag missing as 🔴 CRITICAL
+   - Check for NCI on natural key; flag missing as 🟠 HIGH
+   - If SCD Type 2 columns present (`Is Current Row`, `Valid From`, `Valid To`): check for filtered NCI on `[Is Current Row] = 1`; flag missing as 🟡 MEDIUM
+4. For each Staging table:
+   - Flag the presence of a CIX as 🟡 MEDIUM (anti-pattern — staging should be heap with post-load NCI)
+   - Check that natural key columns used in downstream MERGE have an NCI; flag missing as 🟡 MEDIUM
+5. Detect anti-patterns from `dw-physical-design.md` Section 6
+6. Produce findings report using severity codes
+7. Optionally generate remediation scripts (idempotent `CREATE INDEX … IF NOT EXISTS` pattern) for all flagged items
 
 ## Output Standards
 

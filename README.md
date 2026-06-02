@@ -38,6 +38,7 @@ skills/
       dw-validation-patterns.md       — T-SQL validation queries (orphan facts, unknown members, reconciliation)
       dax-style-guide.md              — DAX coding standard (naming, formatting, VAR/RETURN, upstream-first principle)
       dax-studio-workflow.md          — DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking workflow
+      dw-physical-design.md           — Index strategy (CIX/NCI/CCI), staging heap pattern, statistics, partitioning, shared-instance guidance
 ```
 
 ---
