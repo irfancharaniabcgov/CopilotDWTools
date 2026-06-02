@@ -92,12 +92,12 @@ ORDER   BY rg.object_id, rg.row_group_id;
 Partition large fact tables and periodic snapshot tables by the most common filter column (usually `DateKey` or a date range column).
 
 ```sql
--- Step 1: Create partition function (monthly for a sales fact table)
-CREATE PARTITION FUNCTION PF_Monthly (INT)
+-- Step 1: Create partition function (monthly; DATE type matches Calendar PK)
+CREATE PARTITION FUNCTION PF_Monthly (DATE)
 AS RANGE RIGHT FOR VALUES (
-    20230101, 20230201, 20230301, 20230401, 20230501, 20230601,
-    20230701, 20230801, 20230901, 20231001, 20231101, 20231201,
-    20240101  -- add each new month before the month begins
+    '2023-01-01', '2023-02-01', '2023-03-01', '2023-04-01', '2023-05-01', '2023-06-01',
+    '2023-07-01', '2023-08-01', '2023-09-01', '2023-10-01', '2023-11-01', '2023-12-01',
+    '2024-01-01'  -- add each new month before the month begins
 );
 
 -- Step 2: Create partition scheme
@@ -107,14 +107,14 @@ ALL TO ([PRIMARY]);          -- route all to PRIMARY; adjust for filegroup strat
 
 -- Step 3: Create fact table on partition scheme
 CREATE TABLE [Fact].[SalesOrder] (
-    SalesOrderKey BIGINT        NOT NULL,
-    OrderDateKey  INT           NOT NULL,
-    CustomerKey   INT           NOT NULL,
-    ProductKey    INT           NOT NULL,
-    SalesAmount   DECIMAL(18,4) NOT NULL,
-    Quantity      INT           NOT NULL,
-    LineageKey    INT           NULL
-) ON PS_Monthly (OrderDateKey);
+    SalesOrderKey    BIGINT        NOT NULL,
+    [Order Date Key] DATE          NOT NULL,
+    CustomerKey      INT           NOT NULL,
+    ProductKey       INT           NOT NULL,
+    SalesAmount      DECIMAL(18,4) NOT NULL,
+    Quantity         INT           NOT NULL,
+    LineageKey       INT           NULL
+) ON PS_Monthly ([Order Date Key]);
 
 -- Step 4: Create CCI aligned to partition scheme
 CREATE CLUSTERED COLUMNSTORE INDEX CCI_SalesOrder
@@ -395,7 +395,7 @@ Records the state of a measurable entity at regular intervals (daily, weekly, mo
 CREATE TABLE [Snapshots].[ProjectStatusWeekly]
 (
     -- Degenerate dimensions (snapshot context)
-    SnapshotDateKey         INT           NOT NULL,   -- FK to Dimension.Calendar (end of week date)
+    SnapshotDateKey         DATE          NOT NULL,   -- FK to Dimension.Calendar (end of week date)
     ProjectKey              INT           NOT NULL,   -- FK to Dimension.Project
     StatusKey               INT           NOT NULL,   -- FK to Dimension.ProjectStatus
     -- Measures (state at snapshot date)
@@ -420,11 +420,11 @@ CREATE TABLE [Snapshots].[OrderFulfilment]
 (
     -- Natural key (not surrogate — row is updated, not inserted)
     OrderID                 INT           NOT NULL,
-    -- Milestone date keys (FK to Dimension.Calendar; -1 = not yet reached)
-    OrderDateKey            INT           NOT NULL,
-    PickedDateKey           INT           NOT NULL,
-    ShippedDateKey          INT           NOT NULL,
-    DeliveredDateKey        INT           NOT NULL,
+    -- Milestone date keys (FK to Dimension.Calendar; '1900-01-01' = not yet reached)
+    OrderDateKey            DATE          NOT NULL,
+    PickedDateKey           DATE          NOT NULL,
+    ShippedDateKey          DATE          NOT NULL,
+    DeliveredDateKey        DATE          NOT NULL,
     -- Dimension FKs (current state)
     CustomerKey             INT           NOT NULL,
     ProductKey              INT           NOT NULL,
@@ -449,7 +449,7 @@ Load pattern: SPs named `Snapshots.Load{Entity}` — use MERGE to update existin
 | Date keys | 1 (event date) | 1 (snapshot date) | Multiple milestone dates |
 | Schema | `Fact` | `Snapshots` | `Snapshots` |
 | Load SP | `Fact.Load{Entity}` | `Snapshots.Load{Entity}{Freq}` | `Snapshots.Load{Entity}` |
-| Unknown member | Yes (for all FKs) | Yes | -1 for unreached milestones |
+| Unknown member | Yes (for all FKs) | Yes | `'1900-01-01'` for unreached milestones |
 
 ### SSAS representation
 - Periodic snapshots: exposed as a separate SSAS table via `SSAS.{Name}` view — same rules as fact SSAS views
@@ -468,7 +468,7 @@ CALCULATE(
 |---|---|
 | Snapshots schema used (not Fact) for periodic/accumulating | 🟡 MEDIUM |
 | Accumulating snapshot uses MERGE (not INSERT only) | 🟠 HIGH |
-| Unreached milestone date keys use -1 (not NULL or 0) | 🟠 HIGH |
+| Unreached milestone date keys use `'1900-01-01'` DATE (not NULL, 0, or -1 INT) | 🟠 HIGH |
 | SSAS views follow Title Case alias rules | 🟠 HIGH |
 | Inactive relationships + USERELATIONSHIP() for multi-date accumulating | 🟡 MEDIUM |
 

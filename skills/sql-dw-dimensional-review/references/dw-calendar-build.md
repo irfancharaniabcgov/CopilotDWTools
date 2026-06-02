@@ -4,12 +4,15 @@ Reference scripts for `Dimension.Calendar`, `Dimension.StatHolidays`, and the
 `SSAS.v_Calendar` view. This is a **one-time build** (idempotent — safe to re-run).
 
 **Design basis:** Adapted from the existing `dbo.Calendar` / `dbo.[LoadCalendar]` / `dbo.stat_holiday`
-objects in the OLTP database. Key differences in the DW version:
+objects in the OLTP database.
 
 | Aspect | OLTP (`dbo.Calendar`) | DW (`Dimension.Calendar`) |
 |---|---|---|
-| Primary key type | `DATE` (`DateKey DATE`) | `INT` YYYYMMDD (`[Date Key] INT`) — Kimball convention |
-| Unknown/sentinel rows | `'1753-01-01'` and `'9999-12-31'` | `Date Key = -1` (aligns with `EndDateKey = -1` for open events) |
+| Primary key type | `DATE` (`DateKey DATE`) | `DATE` (`[Date Key] DATE`) — matches OLTP |
+| Integer date surrogate | `YYYYMMDD` implicit in int columns | `[YYYYMMDD] INT` separate column; `[YYYYMM] CHAR(6)` |
+| Unknown/sentinel rows | `'1753-01-01'` (min) / `'9999-12-31'` (max) | `'1900-01-01'` (unknown); `'9999-12-31'` (open/future) |
+| Fact table FK type | `DATE` | `DATE` — FK columns match Calendar PK |
+| Open event sentinel | `EndDate = '9999-12-31'` | `[End Date Key] = '9999-12-31'` |
 | Load approach | `WHILE` loop (row-by-row) | Recursive CTE (set-based — 10–100× faster) |
 | Column naming | camelCase / no spaces | Title Case with spaces — SSAS/Kimball convention |
 | StatHolidays | `dbo.stat_holiday` (BC + audit cols) | `Dimension.StatHolidays` (same structure, updated generator) |
@@ -19,6 +22,11 @@ objects in the OLTP database. Key differences in the DW version:
 - `Fiscal Year = CASE WHEN MONTH >= 4 THEN YEAR ELSE YEAR - 1 END`
 - Fiscal Period 1 = April, Fiscal Period 12 = March
 - Week numbering: Sunday-start (`DATEFIRST 7`)
+
+**Fact table date FK columns:** Because `[Date Key]` is `DATE`, all fact table date FK
+columns (e.g., `[Date Key]`, `[Order Date Key]`, `[Ship Date Key]`) must also be `DATE`.
+Use `'9999-12-31'` as the sentinel value for open/no-end events. Use `'1900-01-01'` for
+unknown/null dates that must resolve to a Calendar row.
 
 ---
 
@@ -35,48 +43,67 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE TABLE [Dimension].[StatHolidays] (
-        [Stat Holiday Key]      INT           NOT NULL IDENTITY(1, 1),
-        [Stat Holiday Date]     DATE          NOT NULL,
-        [Stat Holiday Date Key] INT           NOT NULL,  -- YYYYMMDD FK to Dimension.Calendar
-        [Stat Holiday Name]     NVARCHAR(200) NOT NULL,
-        [Entry Date]            DATETIME2(7)  NOT NULL CONSTRAINT [DF_StatHolidays_EntryDate]  DEFAULT (GETDATE()),
-        [Update Date]           DATETIME2(7)  NULL,
-        [Is Deleted]            BIT           NOT NULL CONSTRAINT [DF_StatHolidays_IsDeleted] DEFAULT (0),
+        [Stat Holiday Key]  INT           NOT NULL IDENTITY(1, 1),
+        [Stat Holiday Date] DATE          NOT NULL,
+        [Stat Holiday Name] NVARCHAR(200) NOT NULL,
+        [Entry Date]        DATETIME2(7)  NOT NULL CONSTRAINT [DF_StatHolidays_EntryDate]  DEFAULT (GETDATE()),
+        [Update Date]       DATETIME2(7)  NULL,
+        [Is Deleted]        BIT           NOT NULL CONSTRAINT [DF_StatHolidays_IsDeleted] DEFAULT (0),
         CONSTRAINT [PK_Dimension_StatHolidays]
             PRIMARY KEY CLUSTERED ([Stat Holiday Key]),
         CONSTRAINT [UQ_Dimension_StatHolidays_Date]
             UNIQUE NONCLUSTERED ([Stat Holiday Date])
     );
-
-    EXECUTE sp_addextendedproperty
-        @name = N'MS_Description',
-        @value = N'BC statutory and quasi-statutory holidays (Easter Monday, Boxing Day included per org policy). Populated by the Nager.Date C# project. Use SSAS.v_Calendar to join holiday data to Dimension.Calendar.',
-        @level0type = N'SCHEMA', @level0name = N'Dimension',
-        @level1type = N'TABLE',  @level1name = N'StatHolidays';
 END
-GO
 ```
 
-**How the Nager.Date generator output integrates:**
+> **Note:** No separate `[Stat Holiday Date Key] INT` column. The table joins to
+> `Dimension.Calendar` directly on `[Stat Holiday Date] = [Date Key]` (both `DATE`).
+> BC holidays only — no Province Code column needed.
 
-The generator produces a MERGE statement like:
+**Holiday generation — MERGE template** (output from updated StatHolidayGenerator):
+
 ```sql
-MERGE [Dimension].[StatHolidays] AS Target
-USING @tbl AS Source
-ON Source.holidayDate = Target.[Stat Holiday Date]
+MERGE [Dimension].[StatHolidays] AS [target]
+USING (
+    VALUES
+        (CAST('2024-01-01' AS DATE), N'New Year''s Day'),
+        (CAST('2024-02-19' AS DATE), N'Family Day'),
+        (CAST('2024-03-29' AS DATE), N'Good Friday'),
+        (CAST('2024-04-01' AS DATE), N'Easter Monday'),
+        (CAST('2024-05-20' AS DATE), N'Victoria Day'),
+        (CAST('2024-07-01' AS DATE), N'Canada Day'),
+        (CAST('2024-08-05' AS DATE), N'BC Day'),
+        (CAST('2024-09-02' AS DATE), N'Labour Day'),
+        (CAST('2024-09-30' AS DATE), N'National Day for Truth and Reconciliation'),
+        (CAST('2024-10-14' AS DATE), N'Thanksgiving Day'),
+        (CAST('2024-11-11' AS DATE), N'Remembrance Day'),
+        (CAST('2024-12-25' AS DATE), N'Christmas Day'),
+        (CAST('2024-12-26' AS DATE), N'Boxing Day')
+) AS [source] ([Stat Holiday Date], [Stat Holiday Name])
+ON [target].[Stat Holiday Date] = [source].[Stat Holiday Date]
+WHEN MATCHED AND [target].[Is Deleted] = 0 THEN
+    UPDATE SET
+        [Stat Holiday Name] = [source].[Stat Holiday Name],
+        [Update Date]       = GETDATE()
 WHEN NOT MATCHED BY TARGET THEN
-    INSERT ([Stat Holiday Date], [Stat Holiday Date Key], [Stat Holiday Name])
-    VALUES (Source.holidayDate,
-            YEAR(Source.holidayDate)*10000 + MONTH(Source.holidayDate)*100 + DAY(Source.holidayDate),
-            Source.holidayName);
+    INSERT ([Stat Holiday Date], [Stat Holiday Name])
+    VALUES ([source].[Stat Holiday Date], [source].[Stat Holiday Name]);
 ```
 
-The C# project needs updating to target `Dimension.StatHolidays` using this schema
-(see Section 6).
+> **BC policy quirks:**
+> - Easter Monday and Boxing Day are included even though they are not technically
+>   BC statutory holidays — the org treats them as stats.
+> - In-lieu: if a holiday falls on Saturday the prior Friday is the observed date;
+>   if it falls on Sunday the following Monday is the observed date. The generator
+>   outputs the *observed* date, not the actual date.
 
 ---
 
 ## 2. Dimension.Calendar Table
+
+44 columns. `[Date Key]` is `DATE` (matches OLTP convention); integer representations
+are available as `[YYYYMMDD]` (INT) and `[YYYYMM]` (CHAR(6)).
 
 ```sql
 IF NOT EXISTS (
@@ -86,658 +113,563 @@ IF NOT EXISTS (
 )
 BEGIN
     CREATE TABLE [Dimension].[Calendar] (
-        -- ── Key ─────────────────────────────────────────────────────────────────
-        [Date Key]                  INT           NOT NULL,  -- YYYYMMDD; -1 = Unknown
-        [Date]                      DATE          NULL,
+        -- ── Primary key ───────────────────────────────────────────────────────────
+        [Date Key]                  DATE         NOT NULL,
 
-        -- ── Calendar Day ─────────────────────────────────────────────────────
-        [Day]                       TINYINT       NULL,      -- 1–31
-        [Day Of Week]               TINYINT       NULL,      -- 1=Sun … 7=Sat (DATEFIRST 7)
-        [Weekday Name]              VARCHAR(10)   NULL,      -- 'Sunday' … 'Saturday'
-        [Weekday Name Short]        CHAR(3)       NULL,      -- 'Sun' … 'Sat'
-        [Weekday Name First Letter] CHAR(1)       NULL,      -- 'S' … 'S'
-        [Is Weekday]                BIT           NULL,      -- 1 = Mon–Fri
-        [Is Weekend]                BIT           NULL,      -- 1 = Sat or Sun
-        [Day Of Week In Month]      TINYINT       NULL,      -- Nth occurrence of weekday in month (e.g. 3 = 3rd Monday)
-        [Day Of Week In Year]       TINYINT       NULL,      -- Nth occurrence of weekday in year
-        [Day Of Year]               SMALLINT      NULL,      -- 1–366
+        -- ── Integer surrogate / integer date representations ──────────────────────
+        [YYYYMMDD]                  INT          NULL,   -- 20240415
+        [YYYYMM]                    CHAR(6)      NULL,   -- '202404'
 
-        -- ── Calendar Week (Sunday-start) ─────────────────────────────────────
-        [Week Of Month]             TINYINT       NULL,      -- 1–6
-        [Week Of Year]              TINYINT       NULL,      -- 1–53, Sunday-start
-        [First Date Of Week]        DATE          NULL,      -- Sunday of the week
-        [Last Date Of Week]         DATE          NULL,      -- Saturday of the week
+        -- ── Standard calendar year/month/day ─────────────────────────────────────
+        [Year]                      INT          NULL,
+        [Quarter]                   INT          NULL,
+        [Quarter Name]              CHAR(2)      NULL,   -- 'Q1'
+        [Month]                     INT          NULL,
+        [Month Name]                VARCHAR(9)   NULL,   -- 'April'
+        [Month Name Short]          CHAR(3)      NULL,   -- 'Apr'
+        [Month Name First Letter]   CHAR(1)      NULL,   -- 'A'
+        [Month Year]                CHAR(8)      NULL,   -- 'Apr 2024'
+        [Day]                       INT          NULL,
+        [Day Of Week]               INT          NULL,   -- 1 = Sunday (DATEFIRST 7)
+        [Weekday Name]              VARCHAR(9)   NULL,   -- 'Monday'
+        [Weekday Name Short]        CHAR(3)      NULL,   -- 'Mon'
+        [Weekday Name First Letter] CHAR(1)      NULL,   -- 'M'
+        [Day Of Year]               INT          NULL,
+        [Day Of Week In Month]      INT          NULL,   -- nth occurrence of weekday in month
+        [Day Of Week In Year]       INT          NULL,   -- nth occurrence of weekday in year
+        [Week Of Year]              INT          NULL,   -- ISO-like, Sunday-start
+        [Week Of Month]             INT          NULL,
+        [Is Weekday]                BIT          NULL,
+        [Is Weekend]                BIT          NULL,
 
-        -- ── Calendar Month ───────────────────────────────────────────────────
-        [Month]                     TINYINT       NULL,      -- 1–12
-        [Month Name]                VARCHAR(10)   NULL,      -- 'January' …
-        [Month Name Short]          CHAR(3)       NULL,      -- 'Jan' …
-        [Month Name First Letter]   CHAR(1)       NULL,      -- 'J' …
-        [Month Year]                CHAR(8)       NULL,      -- 'Apr 2024'
-        [YYYYMM]                    CHAR(6)       NULL,      -- '202404'
-        [Days In Month]             TINYINT       NULL,      -- 28–31
-        [First Date Of Month]       DATE          NULL,
-        [Last Date Of Month]        DATE          NULL,
+        -- ── Fiscal calendar (Apr–Mar, starting-year convention) ───────────────────
+        [Fiscal Year]               INT          NULL,   -- FY2024 = Apr 2024 – Mar 2025
+        [Fiscal Year Name]          CHAR(6)      NULL,   -- 'FY2024'
+        [Fiscal Year Name Short]    CHAR(4)      NULL,   -- 'FY24'
+        [Fiscal Quarter]            INT          NULL,   -- 1–4 (Apr=Q1)
+        [Fiscal Quarter Name]       CHAR(2)      NULL,   -- 'Q1'
+        [Fiscal Period]             INT          NULL,   -- 1–12 (Apr=1, Mar=12)
+        [Fiscal Period Name]        VARCHAR(9)   NULL,   -- 'Period 1'
 
-        -- ── Calendar Quarter ─────────────────────────────────────────────────
-        [Quarter]                   TINYINT       NULL,      -- 1–4
-        [Quarter Name]              CHAR(2)       NULL,      -- 'Q1' …
-        [First Date Of Quarter]     DATE          NULL,
-        [Last Date Of Quarter]      DATE          NULL,
+        -- ── Period boundary dates ─────────────────────────────────────────────────
+        [First Date Of Month]       DATE         NULL,
+        [Last Date Of Month]        DATE         NULL,
+        [First Date Of Quarter]     DATE         NULL,
+        [Last Date Of Quarter]      DATE         NULL,
+        [First Date Of Year]        DATE         NULL,
+        [Last Date Of Year]         DATE         NULL,
+        [First Date Of Fiscal Year] DATE         NULL,
+        [Last Date Of Fiscal Year]  DATE         NULL,
 
-        -- ── Calendar Year ────────────────────────────────────────────────────
-        [Year]                      SMALLINT      NULL,      -- e.g. 2024
-        [Is Leap Year]              BIT           NULL,
-        [First Date Of Year]        DATE          NULL,
-        [Last Date Of Year]         DATE          NULL,
-
-        -- ── Pay Week (biweekly from 2000-01-01 root) ────────────────────────
-        -- Used for payroll report filtering; 0 = even week, 1 = odd week
-        [Is Pay Week]               BIT           NULL,
-
-        -- ── Fiscal Year (Apr 1 – Mar 31; FY = starting calendar year) ───────
-        -- FY2024 = Apr 1, 2024 – Mar 31, 2025
-        -- FiscalYear = YEAR when Month >= 4; YEAR - 1 when Month < 4
-        [Fiscal Year]               SMALLINT      NULL,      -- e.g. 2024 for Apr 2024 – Mar 2025
-        [Fiscal Year Label]         CHAR(6)       NULL,      -- 'FY2024'
-        [Fiscal Year Label Short]   CHAR(4)       NULL,      -- 'FY24'
-
-        -- Fiscal Period: Apr=1, May=2, …, Dec=9, Jan=10, Feb=11, Mar=12
-        [Fiscal Month]              TINYINT       NULL,      -- 1–12 (same as Fiscal Period)
-        [Fiscal Period Label]       VARCHAR(10)   NULL,      -- 'FY2024 P01'
-        [Fiscal Period Sort]        INT           NULL,      -- FiscalYear * 100 + FiscalMonth (for sorting)
-
-        [Fiscal Quarter]            TINYINT       NULL,      -- 1–4 (Q1=Apr–Jun, Q4=Jan–Mar)
-        [Fiscal Quarter Name]       CHAR(2)       NULL,      -- 'Q1' … 'Q4'
-        [Fiscal Quarter Label]      VARCHAR(10)   NULL,      -- 'FY2024 Q1'
-        [Fiscal Quarter Sort]       INT           NULL,      -- FiscalYear * 10 + FiscalQuarter
+        -- ── Calendar enrichment ───────────────────────────────────────────────────
+        [Is Leap Year]              BIT          NULL,
+        [Days In Month]             INT          NULL,
+        [Is Stat Holiday]           BIT          NULL,
+        [Stat Holiday Name]         NVARCHAR(200) NULL,
+        [Is Pay Week]               BIT          NULL,   -- biweekly from 2000-01-01
 
         CONSTRAINT [PK_Dimension_Calendar]
-            PRIMARY KEY CLUSTERED ([Date Key])
+            PRIMARY KEY CLUSTERED ([Date Key] ASC)
     );
-
-    EXECUTE sp_addextendedproperty
-        @name = N'MS_Description',
-        @value = N'Date dimension. Range 2000-01-01 to 2050-12-31. Date Key = -1 is unknown member (open/active records). Fiscal year uses starting year convention: FY2024 = Apr 1 2024 – Mar 31 2025. Week numbering is Sunday-start (DATEFIRST 7). Stat holidays and working-day flags are in SSAS.v_Calendar.',
-        @level0type = N'SCHEMA', @level0name = N'Dimension',
-        @level1type = N'TABLE',  @level1name = N'Calendar';
 END
-GO
 ```
+
+> **Unknown / sentinel rows:**
+> | Row | `[Date Key]` | Purpose |
+> |-----|-------------|---------|
+> | Unknown | `'1900-01-01'` | FK target when source date is NULL or unknown |
+> | Open/future | `'9999-12-31'` | FK target for events with no end date (SCD Type 2, open subscriptions, etc.) |
+>
+> These rows are inserted by `Dimension.PopulateCalendar` before the main date range.
 
 ---
 
-## 3. Calendar Population Stored Procedure
-
-Replaces the OLTP `dbo.LoadCalendar` WHILE loop with a set-based CTE approach.
-Covers 2000-01-01 to 2050-12-31 (18,628 rows + 1 unknown member = 18,629 total).
+## 3. Dimension.PopulateCalendar Stored Procedure
 
 ```sql
 CREATE OR ALTER PROCEDURE [Dimension].[PopulateCalendar]
 AS
 BEGIN
     SET NOCOUNT ON;
-    SET XACT_ABORT ON;
-    SET DATEFIRST 7;   -- Sunday = 1 (US week convention, matches OLTP LoadCalendar)
+    SET DATEFIRST 7;   -- Sunday = 1
 
-    BEGIN TRY
-        DECLARE @PayRootDate DATE = '2000-01-01';  -- biweekly pay cycle root
+    -- ── Sentinel / unknown member rows ──────────────────────────────────────────
+    MERGE [Dimension].[Calendar] AS [target]
+    USING (
+        VALUES
+            (CAST('1900-01-01' AS DATE)),  -- unknown
+            (CAST('9999-12-31' AS DATE))   -- open/future
+    ) AS [source] ([Date Key])
+    ON [target].[Date Key] = [source].[Date Key]
+    WHEN NOT MATCHED BY TARGET THEN
+        INSERT ([Date Key], [YYYYMMDD], [YYYYMM],
+                [Year], [Quarter], [Quarter Name], [Month],
+                [Month Name], [Month Name Short], [Month Name First Letter],
+                [Month Year], [Day], [Day Of Week],
+                [Weekday Name], [Weekday Name Short], [Weekday Name First Letter],
+                [Day Of Year], [Day Of Week In Month], [Day Of Week In Year],
+                [Week Of Year], [Week Of Month],
+                [Is Weekday], [Is Weekend],
+                [Fiscal Year], [Fiscal Year Name], [Fiscal Year Name Short],
+                [Fiscal Quarter], [Fiscal Quarter Name],
+                [Fiscal Period], [Fiscal Period Name],
+                [First Date Of Month], [Last Date Of Month],
+                [First Date Of Quarter], [Last Date Of Quarter],
+                [First Date Of Year], [Last Date Of Year],
+                [First Date Of Fiscal Year], [Last Date Of Fiscal Year],
+                [Is Leap Year], [Days In Month],
+                [Is Stat Holiday], [Stat Holiday Name], [Is Pay Week])
+        VALUES (
+            [source].[Date Key],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL, NULL
+        );
 
-        -- ── Generate date spine ──────────────────────────────────────────────
-        ;WITH DateSpine AS (
-            SELECT CAST('2000-01-01' AS DATE) AS [Date]
-            UNION ALL
-            SELECT DATEADD(DAY, 1, [Date])
-            FROM DateSpine
-            WHERE [Date] < '2050-12-31'
-        ),
-        Base AS (
-            SELECT
-                d.[Date],
-                YEAR(d.[Date]) * 10000
-                    + MONTH(d.[Date]) * 100
-                    + DAY(d.[Date])                     AS [Date Key],
+    -- ── Main date range: 2000-01-01 through 2050-12-31 ─────────────────────────
+    ;WITH [DateSpine] AS (
+        SELECT CAST('2000-01-01' AS DATE) AS [d]
+        UNION ALL
+        SELECT DATEADD(DAY, 1, [d])
+        FROM [DateSpine]
+        WHERE [d] < '2050-12-31'
+    )
+    MERGE [Dimension].[Calendar] AS [target]
+    USING (
+        SELECT
+            -- ── Keys & integer representations ───────────────────────────────────
+            [d]                                                             AS [Date Key],
+            YEAR([d]) * 10000 + MONTH([d]) * 100 + DAY([d])               AS [YYYYMMDD],
+            CAST(YEAR([d]) * 100 + MONTH([d]) AS CHAR(6))                  AS [YYYYMM],
 
-                DAY(d.[Date])                           AS [Day],
-                DATEPART(WEEKDAY, d.[Date])             AS [Day Of Week],  -- 1=Sun
-                DATENAME(WEEKDAY,  d.[Date])            AS [Weekday Name],
-                MONTH(d.[Date])                         AS [Month],
-                DATENAME(MONTH,    d.[Date])            AS [Month Name],
-                YEAR(d.[Date])                          AS [Year],
+            -- ── Calendar year / month / day ───────────────────────────────────────
+            YEAR([d])                                                       AS [Year],
+            DATEPART(QUARTER, [d])                                          AS [Quarter],
+            'Q' + CAST(DATEPART(QUARTER, [d]) AS CHAR(1))                  AS [Quarter Name],
+            MONTH([d])                                                      AS [Month],
+            DATENAME(MONTH, [d])                                            AS [Month Name],
+            LEFT(DATENAME(MONTH, [d]), 3)                                   AS [Month Name Short],
+            LEFT(DATENAME(MONTH, [d]), 1)                                   AS [Month Name First Letter],
+            LEFT(DATENAME(MONTH, [d]), 3) + ' ' + CAST(YEAR([d]) AS VARCHAR(4)) AS [Month Year],
+            DAY([d])                                                        AS [Day],
+            DATEPART(WEEKDAY, [d])                                          AS [Day Of Week],
+            DATENAME(WEEKDAY, [d])                                          AS [Weekday Name],
+            LEFT(DATENAME(WEEKDAY, [d]), 3)                                 AS [Weekday Name Short],
+            LEFT(DATENAME(WEEKDAY, [d]), 1)                                 AS [Weekday Name First Letter],
+            DATEPART(DAYOFYEAR, [d])                                        AS [Day Of Year],
+            -- nth occurrence of this weekday within the month
+            (DAY([d]) - 1) / 7 + 1                                         AS [Day Of Week In Month],
+            -- nth occurrence of this weekday within the year
+            (DATEPART(DAYOFYEAR, [d]) - 1) / 7 + 1                        AS [Day Of Week In Year],
+            DATEPART(WEEK, [d])                                             AS [Week Of Year],
+            -- week within month (Sunday-anchored)
+            DATEDIFF(WEEK,
+                DATEADD(DAY, 1 - DAY([d]), [d]),
+                [d]) + 1                                                    AS [Week Of Month],
+            CASE WHEN DATEPART(WEEKDAY, [d]) BETWEEN 2 AND 6 THEN 1 ELSE 0 END AS [Is Weekday],
+            CASE WHEN DATEPART(WEEKDAY, [d]) IN (1, 7)        THEN 1 ELSE 0 END AS [Is Weekend],
 
-                -- Fiscal year: starting-year convention
-                -- Apr–Dec: FY = current year  |  Jan–Mar: FY = prior year
-                CASE WHEN MONTH(d.[Date]) >= 4
-                     THEN YEAR(d.[Date])
-                     ELSE YEAR(d.[Date]) - 1
-                END                                     AS [Fiscal Year],
+            -- ── Fiscal calendar (Apr–Mar, starting-year convention) ───────────────
+            -- FY2024 = Apr 1 2024 – Mar 31 2025
+            CASE WHEN MONTH([d]) >= 4 THEN YEAR([d]) ELSE YEAR([d]) - 1 END AS [Fiscal Year],
+            'FY' + CAST(CASE WHEN MONTH([d]) >= 4 THEN YEAR([d]) ELSE YEAR([d]) - 1 END AS VARCHAR(4))
+                                                                            AS [Fiscal Year Name],
+            'FY' + RIGHT(CAST(CASE WHEN MONTH([d]) >= 4 THEN YEAR([d]) ELSE YEAR([d]) - 1 END AS VARCHAR(4)), 2)
+                                                                            AS [Fiscal Year Name Short],
+            -- Fiscal Quarter: Apr-Jun=Q1, Jul-Sep=Q2, Oct-Dec=Q3, Jan-Mar=Q4
+            CASE
+                WHEN MONTH([d]) IN (4,5,6)   THEN 1
+                WHEN MONTH([d]) IN (7,8,9)   THEN 2
+                WHEN MONTH([d]) IN (10,11,12) THEN 3
+                ELSE 4
+            END                                                             AS [Fiscal Quarter],
+            'Q' + CAST(CASE
+                WHEN MONTH([d]) IN (4,5,6)   THEN 1
+                WHEN MONTH([d]) IN (7,8,9)   THEN 2
+                WHEN MONTH([d]) IN (10,11,12) THEN 3
+                ELSE 4
+            END AS CHAR(1))                                                 AS [Fiscal Quarter Name],
+            -- Fiscal Period: Apr=1 … Mar=12
+            CASE WHEN MONTH([d]) >= 4 THEN MONTH([d]) - 3 ELSE MONTH([d]) + 9 END
+                                                                            AS [Fiscal Period],
+            'Period ' + CAST(
+                CASE WHEN MONTH([d]) >= 4 THEN MONTH([d]) - 3 ELSE MONTH([d]) + 9 END
+            AS VARCHAR(2))                                                  AS [Fiscal Period Name],
 
-                -- Fiscal Period: Apr=1 … Mar=12
-                CASE WHEN MONTH(d.[Date]) >= 4
-                     THEN MONTH(d.[Date]) - 3
-                     ELSE MONTH(d.[Date]) + 9
-                END                                     AS [Fiscal Month],
+            -- ── Period boundary dates ─────────────────────────────────────────────
+            CAST(DATEFROMPARTS(YEAR([d]), MONTH([d]), 1) AS DATE)           AS [First Date Of Month],
+            CAST(EOMONTH([d]) AS DATE)                                      AS [Last Date Of Month],
+            CAST(DATEADD(QUARTER, DATEDIFF(QUARTER, 0, [d]), 0) AS DATE)    AS [First Date Of Quarter],
+            CAST(DATEADD(DAY, -1,
+                DATEADD(QUARTER, DATEDIFF(QUARTER, 0, [d]) + 1, 0)) AS DATE) AS [Last Date Of Quarter],
+            CAST(DATEFROMPARTS(YEAR([d]), 1, 1) AS DATE)                    AS [First Date Of Year],
+            CAST(DATEFROMPARTS(YEAR([d]), 12, 31) AS DATE)                  AS [Last Date Of Year],
+            -- Fiscal year boundaries
+            CAST(DATEFROMPARTS(
+                CASE WHEN MONTH([d]) >= 4 THEN YEAR([d]) ELSE YEAR([d]) - 1 END,
+                4, 1) AS DATE)                                              AS [First Date Of Fiscal Year],
+            CAST(DATEFROMPARTS(
+                CASE WHEN MONTH([d]) >= 4 THEN YEAR([d]) + 1 ELSE YEAR([d]) END,
+                3, 31) AS DATE)                                             AS [Last Date Of Fiscal Year],
 
-                -- Fiscal Quarter: Q1=Apr–Jun, Q2=Jul–Sep, Q3=Oct–Dec, Q4=Jan–Mar
-                CASE DATEPART(QUARTER, d.[Date])
-                    WHEN 1 THEN 4
-                    WHEN 2 THEN 1
-                    WHEN 3 THEN 2
-                    WHEN 4 THEN 3
-                END                                     AS [Fiscal Quarter],
+            -- ── Calendar enrichment ───────────────────────────────────────────────
+            CASE WHEN DAY(EOMONTH(DATEFROMPARTS(YEAR([d]), 2, 1))) = 29
+                 THEN 1 ELSE 0 END                                          AS [Is Leap Year],
+            DAY(EOMONTH([d]))                                               AS [Days In Month],
+            -- Is Pay Week: biweekly Thursday payroll, rooted at 2000-01-01
+            CASE WHEN ABS(DATEDIFF(WEEK, '2000-01-01', [d])) % 2 = 0
+                 THEN 1 ELSE 0 END                                          AS [Is Pay Week]
 
-                -- IsLeapYear
-                CAST(CASE
-                    WHEN YEAR(d.[Date]) % 4   <> 0 THEN 0
-                    WHEN YEAR(d.[Date]) % 100 <> 0 THEN 1
-                    WHEN YEAR(d.[Date]) % 400 <> 0 THEN 0
-                    ELSE 1
-                END AS BIT)                             AS [Is Leap Year],
-
-                -- Pay week: odd/even biweekly from root date
-                CAST(ABS(DATEDIFF(WEEK, @PayRootDate, d.[Date])) & 1
-                     AS BIT)                            AS [Is Pay Week],
-
-                -- Period boundary dates
-                DATEADD(DAY, -(DATEPART(WEEKDAY, d.[Date]) - 1), d.[Date])
-                                                        AS [First Date Of Week],
-                DATEADD(DAY, 7 - DATEPART(WEEKDAY, d.[Date]), d.[Date])
-                                                        AS [Last Date Of Week],
-                DATEFROMPARTS(YEAR(d.[Date]), MONTH(d.[Date]), 1)
-                                                        AS [First Date Of Month],
-                EOMONTH(d.[Date])                       AS [Last Date Of Month],
-                DATEFROMPARTS(YEAR(d.[Date]), 1, 1)     AS [First Date Of Year],
-                DATEFROMPARTS(YEAR(d.[Date]), 12, 31)   AS [Last Date Of Year],
-                DATEADD(qq,  DATEDIFF(qq, 0, d.[Date]), 0)
-                                                        AS [First Date Of Quarter],
-                DATEADD(dd, -1, DATEADD(qq, DATEDIFF(qq, 0, d.[Date]) + 1, 0))
-                                                        AS [Last Date Of Quarter]
-            FROM DateSpine d
+        FROM [DateSpine]
+    ) AS [source] ON [target].[Date Key] = [source].[Date Key]
+    WHEN MATCHED THEN UPDATE SET
+        [YYYYMMDD]                  = [source].[YYYYMMDD],
+        [YYYYMM]                    = [source].[YYYYMM],
+        [Year]                      = [source].[Year],
+        [Quarter]                   = [source].[Quarter],
+        [Quarter Name]              = [source].[Quarter Name],
+        [Month]                     = [source].[Month],
+        [Month Name]                = [source].[Month Name],
+        [Month Name Short]          = [source].[Month Name Short],
+        [Month Name First Letter]   = [source].[Month Name First Letter],
+        [Month Year]                = [source].[Month Year],
+        [Day]                       = [source].[Day],
+        [Day Of Week]               = [source].[Day Of Week],
+        [Weekday Name]              = [source].[Weekday Name],
+        [Weekday Name Short]        = [source].[Weekday Name Short],
+        [Weekday Name First Letter] = [source].[Weekday Name First Letter],
+        [Day Of Year]               = [source].[Day Of Year],
+        [Day Of Week In Month]      = [source].[Day Of Week In Month],
+        [Day Of Week In Year]       = [source].[Day Of Week In Year],
+        [Week Of Year]              = [source].[Week Of Year],
+        [Week Of Month]             = [source].[Week Of Month],
+        [Is Weekday]                = [source].[Is Weekday],
+        [Is Weekend]                = [source].[Is Weekend],
+        [Fiscal Year]               = [source].[Fiscal Year],
+        [Fiscal Year Name]          = [source].[Fiscal Year Name],
+        [Fiscal Year Name Short]    = [source].[Fiscal Year Name Short],
+        [Fiscal Quarter]            = [source].[Fiscal Quarter],
+        [Fiscal Quarter Name]       = [source].[Fiscal Quarter Name],
+        [Fiscal Period]             = [source].[Fiscal Period],
+        [Fiscal Period Name]        = [source].[Fiscal Period Name],
+        [First Date Of Month]       = [source].[First Date Of Month],
+        [Last Date Of Month]        = [source].[Last Date Of Month],
+        [First Date Of Quarter]     = [source].[First Date Of Quarter],
+        [Last Date Of Quarter]      = [source].[Last Date Of Quarter],
+        [First Date Of Year]        = [source].[First Date Of Year],
+        [Last Date Of Year]         = [source].[Last Date Of Year],
+        [First Date Of Fiscal Year] = [source].[First Date Of Fiscal Year],
+        [Last Date Of Fiscal Year]  = [source].[Last Date Of Fiscal Year],
+        [Is Leap Year]              = [source].[Is Leap Year],
+        [Days In Month]             = [source].[Days In Month],
+        [Is Pay Week]               = [source].[Is Pay Week]
+    WHEN NOT MATCHED BY TARGET THEN
+        INSERT ([Date Key], [YYYYMMDD], [YYYYMM],
+                [Year], [Quarter], [Quarter Name],
+                [Month], [Month Name], [Month Name Short],
+                [Month Name First Letter], [Month Year],
+                [Day], [Day Of Week], [Weekday Name], [Weekday Name Short],
+                [Weekday Name First Letter], [Day Of Year],
+                [Day Of Week In Month], [Day Of Week In Year],
+                [Week Of Year], [Week Of Month],
+                [Is Weekday], [Is Weekend],
+                [Fiscal Year], [Fiscal Year Name], [Fiscal Year Name Short],
+                [Fiscal Quarter], [Fiscal Quarter Name],
+                [Fiscal Period], [Fiscal Period Name],
+                [First Date Of Month], [Last Date Of Month],
+                [First Date Of Quarter], [Last Date Of Quarter],
+                [First Date Of Year], [Last Date Of Year],
+                [First Date Of Fiscal Year], [Last Date Of Fiscal Year],
+                [Is Leap Year], [Days In Month], [Is Pay Week])
+        VALUES (
+            [source].[Date Key], [source].[YYYYMMDD], [source].[YYYYMM],
+            [source].[Year], [source].[Quarter], [source].[Quarter Name],
+            [source].[Month], [source].[Month Name], [source].[Month Name Short],
+            [source].[Month Name First Letter], [source].[Month Year],
+            [source].[Day], [source].[Day Of Week], [source].[Weekday Name],
+            [source].[Weekday Name Short], [source].[Weekday Name First Letter],
+            [source].[Day Of Year], [source].[Day Of Week In Month],
+            [source].[Day Of Week In Year], [source].[Week Of Year],
+            [source].[Week Of Month], [source].[Is Weekday], [source].[Is Weekend],
+            [source].[Fiscal Year], [source].[Fiscal Year Name],
+            [source].[Fiscal Year Name Short], [source].[Fiscal Quarter],
+            [source].[Fiscal Quarter Name], [source].[Fiscal Period],
+            [source].[Fiscal Period Name],
+            [source].[First Date Of Month], [source].[Last Date Of Month],
+            [source].[First Date Of Quarter], [source].[Last Date Of Quarter],
+            [source].[First Date Of Year], [source].[Last Date Of Year],
+            [source].[First Date Of Fiscal Year], [source].[Last Date Of Fiscal Year],
+            [source].[Is Leap Year], [source].[Days In Month], [source].[Is Pay Week]
         )
-        MERGE [Dimension].[Calendar] AS tgt
-        USING (
-            SELECT
-                b.[Date Key],
-                b.[Date],
+    OPTION (MAXRECURSION 0);   -- CTE generates 18,628 rows; exceeds default limit of 100
 
-                -- Day
-                CAST(b.[Day]           AS TINYINT)  AS [Day],
-                CAST(b.[Day Of Week]   AS TINYINT)  AS [Day Of Week],
-                b.[Weekday Name],
-                LEFT(b.[Weekday Name], 3)            AS [Weekday Name Short],
-                LEFT(b.[Weekday Name], 1)            AS [Weekday Name First Letter],
-                CAST(CASE WHEN b.[Day Of Week] BETWEEN 2 AND 6 THEN 1 ELSE 0 END AS BIT)
-                                                    AS [Is Weekday],
-                CAST(CASE WHEN b.[Day Of Week] IN (1, 7) THEN 1 ELSE 0 END AS BIT)
-                                                    AS [Is Weekend],
-                -- Day-of-weekday-in-month: e.g. 3 = 3rd Monday
-                CAST((b.[Day] + 6) / 7              AS TINYINT)
-                                                    AS [Day Of Week In Month],
-                -- Day-of-weekday-in-year: nth occurrence in year
-                CAST((DATEPART(DAYOFYEAR, b.[Date]) + 6) / 7  AS TINYINT)
-                                                    AS [Day Of Week In Year],
-                CAST(DATEPART(DAYOFYEAR, b.[Date])  AS SMALLINT)
-                                                    AS [Day Of Year],
+    -- ── Overlay stat holidays (after main population) ───────────────────────────
+    UPDATE c
+    SET
+        [Is Stat Holiday]  = 1,
+        [Stat Holiday Name] = h.[Stat Holiday Name]
+    FROM [Dimension].[Calendar] c
+    JOIN [Dimension].[StatHolidays] h
+        ON h.[Stat Holiday Date] = c.[Date Key]
+        AND h.[Is Deleted] = 0;
 
-                -- Week
-                CAST(
-                    DATEPART(WEEK, b.[Date])
-                    - DATEPART(WEEK, b.[First Date Of Month]) + 1
-                    AS TINYINT)                      AS [Week Of Month],
-                CAST(DATEPART(WEEK, b.[Date])        AS TINYINT)
-                                                    AS [Week Of Year],
-                b.[First Date Of Week],
-                b.[Last Date Of Week],
-
-                -- Month
-                CAST(b.[Month]         AS TINYINT)  AS [Month],
-                b.[Month Name],
-                LEFT(b.[Month Name], 3)              AS [Month Name Short],
-                LEFT(b.[Month Name], 1)              AS [Month Name First Letter],
-                LEFT(b.[Month Name], 3) + ' ' + CAST(b.[Year] AS VARCHAR(4))
-                                                    AS [Month Year],
-                CAST(b.[Year] AS VARCHAR(4))
-                    + RIGHT('0' + CAST(b.[Month] AS VARCHAR(2)), 2)
-                                                    AS [YYYYMM],
-                CAST(
-                    CASE
-                        WHEN b.[Month] IN (4,6,9,11) THEN 30
-                        WHEN b.[Month] IN (1,3,5,7,8,10,12) THEN 31
-                        WHEN b.[Month] = 2 AND b.[Is Leap Year] = 1 THEN 29
-                        ELSE 28
-                    END AS TINYINT)                 AS [Days In Month],
-                b.[First Date Of Month],
-                b.[Last Date Of Month],
-
-                -- Quarter
-                CAST(DATEPART(QUARTER, b.[Date])    AS TINYINT)
-                                                    AS [Quarter],
-                'Q' + CAST(DATEPART(QUARTER, b.[Date]) AS VARCHAR(1))
-                                                    AS [Quarter Name],
-                b.[First Date Of Quarter],
-                b.[Last Date Of Quarter],
-
-                -- Year
-                CAST(b.[Year] AS SMALLINT)          AS [Year],
-                b.[Is Leap Year],
-                b.[First Date Of Year],
-                b.[Last Date Of Year],
-
-                -- Pay week
-                b.[Is Pay Week],
-
-                -- Fiscal
-                CAST(b.[Fiscal Year]   AS SMALLINT) AS [Fiscal Year],
-                'FY' + CAST(b.[Fiscal Year] AS VARCHAR(4))
-                                                    AS [Fiscal Year Label],
-                'FY' + RIGHT(CAST(b.[Fiscal Year] AS VARCHAR(4)), 2)
-                                                    AS [Fiscal Year Label Short],
-                CAST(b.[Fiscal Month]  AS TINYINT)  AS [Fiscal Month],
-                'FY' + CAST(b.[Fiscal Year] AS VARCHAR(4))
-                    + ' P' + RIGHT('0' + CAST(b.[Fiscal Month] AS VARCHAR(2)), 2)
-                                                    AS [Fiscal Period Label],
-                b.[Fiscal Year] * 100 + b.[Fiscal Month]
-                                                    AS [Fiscal Period Sort],
-                CAST(b.[Fiscal Quarter] AS TINYINT) AS [Fiscal Quarter],
-                'Q' + CAST(b.[Fiscal Quarter] AS VARCHAR(1))
-                                                    AS [Fiscal Quarter Name],
-                'FY' + CAST(b.[Fiscal Year] AS VARCHAR(4))
-                    + ' Q' + CAST(b.[Fiscal Quarter] AS VARCHAR(1))
-                                                    AS [Fiscal Quarter Label],
-                b.[Fiscal Year] * 10 + b.[Fiscal Quarter]
-                                                    AS [Fiscal Quarter Sort]
-
-            FROM Base b
-        ) AS src ON tgt.[Date Key] = src.[Date Key]
-        WHEN MATCHED THEN
-            UPDATE SET
-                tgt.[Date]                      = src.[Date],
-                tgt.[Day]                       = src.[Day],
-                tgt.[Day Of Week]               = src.[Day Of Week],
-                tgt.[Weekday Name]              = src.[Weekday Name],
-                tgt.[Weekday Name Short]        = src.[Weekday Name Short],
-                tgt.[Weekday Name First Letter] = src.[Weekday Name First Letter],
-                tgt.[Is Weekday]                = src.[Is Weekday],
-                tgt.[Is Weekend]                = src.[Is Weekend],
-                tgt.[Day Of Week In Month]      = src.[Day Of Week In Month],
-                tgt.[Day Of Week In Year]       = src.[Day Of Week In Year],
-                tgt.[Day Of Year]               = src.[Day Of Year],
-                tgt.[Week Of Month]             = src.[Week Of Month],
-                tgt.[Week Of Year]              = src.[Week Of Year],
-                tgt.[First Date Of Week]        = src.[First Date Of Week],
-                tgt.[Last Date Of Week]         = src.[Last Date Of Week],
-                tgt.[Month]                     = src.[Month],
-                tgt.[Month Name]                = src.[Month Name],
-                tgt.[Month Name Short]          = src.[Month Name Short],
-                tgt.[Month Name First Letter]   = src.[Month Name First Letter],
-                tgt.[Month Year]                = src.[Month Year],
-                tgt.[YYYYMM]                    = src.[YYYYMM],
-                tgt.[Days In Month]             = src.[Days In Month],
-                tgt.[First Date Of Month]       = src.[First Date Of Month],
-                tgt.[Last Date Of Month]        = src.[Last Date Of Month],
-                tgt.[Quarter]                   = src.[Quarter],
-                tgt.[Quarter Name]              = src.[Quarter Name],
-                tgt.[First Date Of Quarter]     = src.[First Date Of Quarter],
-                tgt.[Last Date Of Quarter]      = src.[Last Date Of Quarter],
-                tgt.[Year]                      = src.[Year],
-                tgt.[Is Leap Year]              = src.[Is Leap Year],
-                tgt.[First Date Of Year]        = src.[First Date Of Year],
-                tgt.[Last Date Of Year]         = src.[Last Date Of Year],
-                tgt.[Is Pay Week]               = src.[Is Pay Week],
-                tgt.[Fiscal Year]               = src.[Fiscal Year],
-                tgt.[Fiscal Year Label]         = src.[Fiscal Year Label],
-                tgt.[Fiscal Year Label Short]   = src.[Fiscal Year Label Short],
-                tgt.[Fiscal Month]              = src.[Fiscal Month],
-                tgt.[Fiscal Period Label]       = src.[Fiscal Period Label],
-                tgt.[Fiscal Period Sort]        = src.[Fiscal Period Sort],
-                tgt.[Fiscal Quarter]            = src.[Fiscal Quarter],
-                tgt.[Fiscal Quarter Name]       = src.[Fiscal Quarter Name],
-                tgt.[Fiscal Quarter Label]      = src.[Fiscal Quarter Label],
-                tgt.[Fiscal Quarter Sort]       = src.[Fiscal Quarter Sort]
-        WHEN NOT MATCHED BY TARGET THEN
-            INSERT (
-                [Date Key], [Date],
-                [Day], [Day Of Week], [Weekday Name], [Weekday Name Short],
-                [Weekday Name First Letter], [Is Weekday], [Is Weekend],
-                [Day Of Week In Month], [Day Of Week In Year], [Day Of Year],
-                [Week Of Month], [Week Of Year], [First Date Of Week], [Last Date Of Week],
-                [Month], [Month Name], [Month Name Short], [Month Name First Letter],
-                [Month Year], [YYYYMM], [Days In Month],
-                [First Date Of Month], [Last Date Of Month],
-                [Quarter], [Quarter Name], [First Date Of Quarter], [Last Date Of Quarter],
-                [Year], [Is Leap Year], [First Date Of Year], [Last Date Of Year],
-                [Is Pay Week],
-                [Fiscal Year], [Fiscal Year Label], [Fiscal Year Label Short],
-                [Fiscal Month], [Fiscal Period Label], [Fiscal Period Sort],
-                [Fiscal Quarter], [Fiscal Quarter Name], [Fiscal Quarter Label],
-                [Fiscal Quarter Sort]
-            )
-            VALUES (
-                src.[Date Key], src.[Date],
-                src.[Day], src.[Day Of Week], src.[Weekday Name], src.[Weekday Name Short],
-                src.[Weekday Name First Letter], src.[Is Weekday], src.[Is Weekend],
-                src.[Day Of Week In Month], src.[Day Of Week In Year], src.[Day Of Year],
-                src.[Week Of Month], src.[Week Of Year], src.[First Date Of Week], src.[Last Date Of Week],
-                src.[Month], src.[Month Name], src.[Month Name Short], src.[Month Name First Letter],
-                src.[Month Year], src.[YYYYMM], src.[Days In Month],
-                src.[First Date Of Month], src.[Last Date Of Month],
-                src.[Quarter], src.[Quarter Name], src.[First Date Of Quarter], src.[Last Date Of Quarter],
-                src.[Year], src.[Is Leap Year], src.[First Date Of Year], src.[Last Date Of Year],
-                src.[Is Pay Week],
-                src.[Fiscal Year], src.[Fiscal Year Label], src.[Fiscal Year Label Short],
-                src.[Fiscal Month], src.[Fiscal Period Label], src.[Fiscal Period Sort],
-                src.[Fiscal Quarter], src.[Fiscal Quarter Name], src.[Fiscal Quarter Label],
-                src.[Fiscal Quarter Sort]
-            )
-        OPTION (MAXRECURSION 0);  -- required: 18,628 rows exceeds default limit of 100
-
-        -- ── Unknown member row (Date Key = -1) ──────────────────────────────
-        IF NOT EXISTS (SELECT 1 FROM [Dimension].[Calendar] WHERE [Date Key] = -1)
-        BEGIN
-            INSERT INTO [Dimension].[Calendar] (
-                [Date Key], [Date],
-                [Day], [Day Of Week], [Weekday Name], [Weekday Name Short],
-                [Weekday Name First Letter], [Is Weekday], [Is Weekend],
-                [Day Of Week In Month], [Day Of Week In Year], [Day Of Year],
-                [Week Of Month], [Week Of Year], [First Date Of Week], [Last Date Of Week],
-                [Month], [Month Name], [Month Name Short], [Month Name First Letter],
-                [Month Year], [YYYYMM], [Days In Month],
-                [First Date Of Month], [Last Date Of Month],
-                [Quarter], [Quarter Name], [First Date Of Quarter], [Last Date Of Quarter],
-                [Year], [Is Leap Year], [First Date Of Year], [Last Date Of Year],
-                [Is Pay Week],
-                [Fiscal Year], [Fiscal Year Label], [Fiscal Year Label Short],
-                [Fiscal Month], [Fiscal Period Label], [Fiscal Period Sort],
-                [Fiscal Quarter], [Fiscal Quarter Name], [Fiscal Quarter Label],
-                [Fiscal Quarter Sort]
-            )
-            VALUES (
-                -1, NULL,
-                NULL,NULL,'Unknown','Unk','U',NULL,NULL,NULL,NULL,NULL,
-                NULL,NULL,NULL,NULL,
-                NULL,'Unknown','Unk','U',
-                'Unknown','N/A',NULL,NULL,NULL,
-                NULL,'N/A',NULL,NULL,
-                NULL,NULL,NULL,NULL,
-                NULL,
-                NULL,'Unknown','Unk',
-                NULL,'Unknown',NULL,
-                NULL,'N/A','Unknown',NULL
-            );
-        END
-
-    END TRY
-    BEGIN CATCH
-        DECLARE @Msg NVARCHAR(2048) = ERROR_MESSAGE();
-        RAISERROR(@Msg, 16, 1);
-    END CATCH
+    -- Clear any removed holidays
+    UPDATE c
+    SET
+        [Is Stat Holiday]  = 0,
+        [Stat Holiday Name] = NULL
+    FROM [Dimension].[Calendar] c
+    WHERE c.[Date Key] > '1900-01-01'
+      AND c.[Date Key] < '9999-12-31'
+      AND c.[Is Stat Holiday] = 1
+      AND NOT EXISTS (
+          SELECT 1 FROM [Dimension].[StatHolidays] h
+          WHERE h.[Stat Holiday Date] = c.[Date Key]
+            AND h.[Is Deleted] = 0
+      );
 END
-GO
-
--- Run the population immediately on first deploy
-EXEC [Dimension].[PopulateCalendar];
-GO
 ```
+
+> **Re-run safety:** The MERGE handles `WHEN MATCHED` so re-running after a holiday
+> table update is safe. Stat holiday clear-up only touches the main date range,
+> never the sentinel rows.
 
 ---
 
-## 4. SSAS View — Holiday Integration and Current-Date Columns
+## 4. SSAS.v_Calendar View
 
-`SSAS.v_Calendar` is the **partition source** for the SSAS Tabular `'Calendar'` table.
-It adds holiday flags and current-date columns computed at query time from `GETDATE()` —
-no nightly refresh SP needed.
+This view adds volatile/relative columns that depend on `GETDATE()`. Keeping these
+in the view (rather than the base table) avoids daily updates to `Dimension.Calendar`.
 
 ```sql
 CREATE OR ALTER VIEW [SSAS].[v_Calendar]
 AS
     SELECT
+        -- ── Passthrough from Dimension.Calendar ───────────────────────────────────
         c.[Date Key],
-        c.[Date],
-
-        -- ── Day ─────────────────────────────────────────────────────────────
-        c.[Day],
-        c.[Day Of Week],
-        c.[Weekday Name],
-        c.[Weekday Name Short],
-        c.[Weekday Name First Letter],
-        c.[Is Weekday],
-        c.[Is Weekend],
-        c.[Day Of Week In Month],
-        c.[Day Of Week In Year],
-        c.[Day Of Year],
-
-        -- ── Holiday (joined from Dimension.StatHolidays) ─────────────────────
-        CAST(CASE WHEN h.[Stat Holiday Date Key] IS NOT NULL THEN 1 ELSE 0 END
-             AS BIT)                                    AS [Is Stat Holiday],
-        h.[Stat Holiday Name],
-
-        -- Is Working Day: weekday AND not a stat holiday
-        CAST(
-            CASE WHEN c.[Is Weekday] = 1
-                  AND h.[Stat Holiday Date Key] IS NULL
-                 THEN 1 ELSE 0 END
-        AS BIT)                                         AS [Is Working Day],
-
-        -- ── Relative / current-date columns (computed from GETDATE()) ────────
-        CAST(CASE WHEN c.[Date] = CAST(GETDATE() AS DATE) THEN 1 ELSE 0 END
-             AS BIT)                                    AS [Is Today],
-
-        CAST(CASE WHEN c.[YYYYMM] =
-                       CAST(YEAR(GETDATE()) AS VARCHAR(4))
-                       + RIGHT('0' + CAST(MONTH(GETDATE()) AS VARCHAR(2)), 2)
-                  THEN 1 ELSE 0 END
-             AS BIT)                                    AS [Is Current Month],
-
-        CAST(CASE WHEN c.[Year] = YEAR(GETDATE()) THEN 1 ELSE 0 END
-             AS BIT)                                    AS [Is Current Calendar Year],
-
-        CAST(CASE WHEN c.[Fiscal Year] =
-                       CASE WHEN MONTH(GETDATE()) >= 4
-                            THEN YEAR(GETDATE())
-                            ELSE YEAR(GETDATE()) - 1
-                       END
-                  THEN 1 ELSE 0 END
-             AS BIT)                                    AS [Is Current Fiscal Year],
-
-        DATEDIFF(DAY, CAST(GETDATE() AS DATE), c.[Date])
-                                                        AS [Relative Day],
-        (YEAR(c.[Date]) - YEAR(GETDATE())) * 12
-            + (MONTH(c.[Date]) - MONTH(GETDATE()))      AS [Relative Month],
-
-        c.[Fiscal Year] - (
-            CASE WHEN MONTH(GETDATE()) >= 4
-                 THEN YEAR(GETDATE())
-                 ELSE YEAR(GETDATE()) - 1
-            END
-        )                                               AS [Relative Fiscal Year],
-
-        -- ── Week ─────────────────────────────────────────────────────────────
-        c.[Week Of Month],
-        c.[Week Of Year],
-        c.[First Date Of Week],
-        c.[Last Date Of Week],
-        c.[Is Pay Week],
-
-        -- ── Month ────────────────────────────────────────────────────────────
+        c.[YYYYMMDD],
+        c.[YYYYMM],
+        c.[Year],
+        c.[Quarter],
+        c.[Quarter Name],
         c.[Month],
         c.[Month Name],
         c.[Month Name Short],
         c.[Month Name First Letter],
         c.[Month Year],
-        c.[YYYYMM],
-        c.[Days In Month],
-        c.[First Date Of Month],
-        c.[Last Date Of Month],
-
-        -- ── Quarter ──────────────────────────────────────────────────────────
-        c.[Quarter],
-        c.[Quarter Name],
-        c.[First Date Of Quarter],
-        c.[Last Date Of Quarter],
-
-        -- ── Calendar Year ────────────────────────────────────────────────────
-        c.[Year],
-        c.[Is Leap Year],
-        c.[First Date Of Year],
-        c.[Last Date Of Year],
-
-        -- ── Fiscal Year ──────────────────────────────────────────────────────
+        c.[Day],
+        c.[Day Of Week],
+        c.[Weekday Name],
+        c.[Weekday Name Short],
+        c.[Weekday Name First Letter],
+        c.[Day Of Year],
+        c.[Day Of Week In Month],
+        c.[Day Of Week In Year],
+        c.[Week Of Year],
+        c.[Week Of Month],
+        c.[Is Weekday],
+        c.[Is Weekend],
         c.[Fiscal Year],
-        c.[Fiscal Year Label],
-        c.[Fiscal Year Label Short],
-        c.[Fiscal Month],
-        c.[Fiscal Period Label],
-        c.[Fiscal Period Sort],
+        c.[Fiscal Year Name],
+        c.[Fiscal Year Name Short],
         c.[Fiscal Quarter],
         c.[Fiscal Quarter Name],
-        c.[Fiscal Quarter Label],
-        c.[Fiscal Quarter Sort]
+        c.[Fiscal Period],
+        c.[Fiscal Period Name],
+        c.[First Date Of Month],
+        c.[Last Date Of Month],
+        c.[First Date Of Quarter],
+        c.[Last Date Of Quarter],
+        c.[First Date Of Year],
+        c.[Last Date Of Year],
+        c.[First Date Of Fiscal Year],
+        c.[Last Date Of Fiscal Year],
+        c.[Is Leap Year],
+        c.[Days In Month],
+        c.[Is Stat Holiday],
+        c.[Stat Holiday Name],
+        c.[Is Pay Week],
+
+        -- ── Relative / current-date columns (volatile — computed from GETDATE()) ──
+        CASE WHEN c.[Date Key] = CAST(GETDATE() AS DATE) THEN 1 ELSE 0 END
+                                                                AS [Is Today],
+        CASE WHEN c.[YYYYMM] = CAST(YEAR(GETDATE()) * 100 + MONTH(GETDATE()) AS CHAR(6))
+             THEN 1 ELSE 0 END                                  AS [Is Current Month],
+        CASE WHEN c.[Fiscal Year] =
+                    CASE WHEN MONTH(GETDATE()) >= 4
+                         THEN YEAR(GETDATE())
+                         ELSE YEAR(GETDATE()) - 1 END
+             THEN 1 ELSE 0 END                                  AS [Is Current Fiscal Year],
+        DATEDIFF(DAY, c.[Date Key], CAST(GETDATE() AS DATE))    AS [Relative Day],
+        DATEDIFF(WEEK, c.[Date Key], CAST(GETDATE() AS DATE))   AS [Relative Week],
+        DATEDIFF(MONTH, c.[Date Key], CAST(GETDATE() AS DATE))  AS [Relative Month]
 
     FROM [Dimension].[Calendar] c
-    LEFT JOIN [Dimension].[StatHolidays] h
-        ON c.[Date Key] = h.[Stat Holiday Date Key]
-        AND h.[Is Deleted] = 0;
+    WHERE c.[Date Key] > '1900-01-01'   -- exclude unknown sentinel
+      AND c.[Date Key] < '9999-12-31';  -- exclude open/future sentinel
 GO
 ```
 
+> **Sentinel row exclusion:** The view filters out both sentinel rows so SSAS only
+> sees real dates. Reference the sentinels directly from `Dimension.Calendar` in ELT
+> fact-load queries (e.g., `ISNULL([source].[OrderDate], '1900-01-01')` for unknown
+> dates, `CAST('9999-12-31' AS DATE)` for open SCD Type 2 rows).
+
 ---
 
-## 5. SSAS Tabular Configuration Notes
+## 5. SSAS Tabular Configuration
 
-### Date table marking
-```
-// Tabular Editor 2 C# script — mark Calendar as Date Table
-Model.Tables["Calendar"].DataCategory = "Time";
-Model.Tables["Calendar"].Columns["Date"].IsKey = true;
-```
+### Date table declaration
 
-### Hidden columns (infrastructure — not shown in field list)
+After importing `SSAS.v_Calendar`, mark it as a Date table:
+
 ```
-[Date Key], [Day Of Week], [Month], [Quarter],
-[First Date Of Week], [Last Date Of Week],
-[First Date Of Month], [Last Date Of Month],
-[First Date Of Quarter], [Last Date Of Quarter],
-[First Date Of Year], [Last Date Of Year],
-[YYYYMM], [Fiscal Period Sort], [Fiscal Quarter Sort],
-[Day Of Week In Month], [Day Of Week In Year],
-[Weekday Name First Letter], [Month Name First Letter]
+Mark as Date Table → Date Column: [Date Key]   (DATA TYPE must be Date — ✓)
 ```
 
-### Sort-By column assignments
+`[Date Key]` is `DATE` type — SQL Server Analysis Services accepts `DATE` columns
+directly as the date table key. No conversion needed.
+
+### Sort-by columns
+
 | Column | Sort By |
 |---|---|
-| `[Weekday Name]` | `[Day Of Week]` |
-| `[Weekday Name Short]` | `[Day Of Week]` |
 | `[Month Name]` | `[Month]` |
 | `[Month Name Short]` | `[Month]` |
-| `[Quarter Name]` | `[Quarter]` |
 | `[Month Year]` | `[YYYYMM]` |
-| `[Fiscal Period Label]` | `[Fiscal Period Sort]` |
-| `[Fiscal Quarter Label]` | `[Fiscal Quarter Sort]` |
+| `[Weekday Name]` | `[Day Of Week]` |
+| `[Weekday Name Short]` | `[Day Of Week]` |
+| `[Fiscal Period Name]` | `[Fiscal Period]` |
 | `[Fiscal Quarter Name]` | `[Fiscal Quarter]` |
-| `[Fiscal Year Label]` | `[Fiscal Year]` |
-| `[Fiscal Year Label Short]` | `[Fiscal Year]` |
+| `[Fiscal Year Name]` | `[Fiscal Year]` |
+| `[Fiscal Year Name Short]` | `[Fiscal Year]` |
+| `[Quarter Name]` | `[Quarter]` |
 
-### Display folders (recommended)
-```
-Calendar\Day          — Day, Day Of Week, Weekday Name, Weekday Name Short,
-                        Is Weekday, Is Weekend, Day Of Year
-Calendar\Week         — Week Of Month, Week Of Year, First/Last Date Of Week, Is Pay Week
-Calendar\Month        — Month, Month Name, Month Name Short, Month Year, YYYYMM,
-                        Days In Month, First/Last Date Of Month
-Calendar\Quarter      — Quarter, Quarter Name, First/Last Date Of Quarter
-Calendar\Year         — Year, Is Leap Year, First/Last Date Of Year
-Fiscal\Fiscal Year    — Fiscal Year, Fiscal Year Label, Fiscal Year Label Short,
-                        Is Current Fiscal Year, Relative Fiscal Year
-Fiscal\Fiscal Period  — Fiscal Month, Fiscal Period Label
-Fiscal\Fiscal Quarter — Fiscal Quarter, Fiscal Quarter Name, Fiscal Quarter Label
-Flags                 — Is Stat Holiday, Stat Holiday Name, Is Working Day, Is Today,
-                        Is Current Month, Is Current Calendar Year
-Relative              — Relative Day, Relative Month, Relative Fiscal Year
-```
+### Hidden columns (numeric keys used for sort-by only)
+
+`[Month]`, `[Quarter]`, `[Day Of Week]`, `[Day Of Year]`, `[Week Of Year]`,
+`[Day Of Week In Month]`, `[Day Of Week In Year]`, `[Week Of Month]`,
+`[Fiscal Period]`, `[Fiscal Quarter]`, `[Fiscal Year]`,
+`[YYYYMMDD]`, `[YYYYMM]`, `[Relative Day]`, `[Relative Week]`, `[Relative Month]`
+
+### Display folders
+
+| Folder | Columns |
+|---|---|
+| `Calendar\Year` | `[Year]`, `[Quarter]`, `[Quarter Name]`, `[Month]`, `[Month Name]`, `[Month Name Short]`, `[Month Year]`, `[Day]` |
+| `Calendar\Week` | `[Week Of Year]`, `[Week Of Month]`, `[Day Of Week]`, `[Weekday Name]`, `[Weekday Name Short]` |
+| `Calendar\Day Attributes` | `[Day Of Year]`, `[Day Of Week In Month]`, `[Day Of Week In Year]`, `[Is Weekday]`, `[Is Weekend]`, `[Is Leap Year]`, `[Days In Month]` |
+| `Calendar\Period Boundaries` | `[First Date Of Month]`, `[Last Date Of Month]`, `[First Date Of Quarter]`, `[Last Date Of Quarter]`, `[First Date Of Year]`, `[Last Date Of Year]` |
+| `Fiscal\Year` | `[Fiscal Year]`, `[Fiscal Year Name]`, `[Fiscal Year Name Short]`, `[Fiscal Quarter]`, `[Fiscal Quarter Name]`, `[Fiscal Period]`, `[Fiscal Period Name]` |
+| `Fiscal\Period Boundaries` | `[First Date Of Fiscal Year]`, `[Last Date Of Fiscal Year]` |
+| `Relative` | `[Is Today]`, `[Is Current Month]`, `[Is Current Fiscal Year]`, `[Relative Day]`, `[Relative Week]`, `[Relative Month]` |
+| `Holidays & Payroll` | `[Is Stat Holiday]`, `[Stat Holiday Name]`, `[Is Pay Week]` |
+| `Labels` | `[Month Name First Letter]`, `[Weekday Name First Letter]`, `[Month Name Short]`, `[Weekday Name Short]` |
+
+### Time intelligence
+
+Because `[Date Key]` is `DATE` type, standard SSAS time intelligence functions
+(`DATEADD`, `DATESYTD`, `DATESQTD`, `DATESINPERIOD`, etc.) work without any
+additional configuration.
 
 ---
 
-## 6. StatHolidayGenerator — Update Notes
+## 6. StatHolidayGenerator Update Notes
 
-The existing project (`src/dev/Database/StatHolidayGenerator`) is outdated:
+The C# project at `src\dev\Database\StatHolidayGenerator` needs the following
+changes before it can generate the full 2000–2050 range targeting `Dimension.StatHolidays`.
 
-| Issue | Detail |
-|---|---|
-| Framework | .NET 6 → upgrade to .NET 8 |
-| Nager.Date version | 1.46.0 → upgrade to 3.x (API changed; `HolidayClient` no longer used; use `DateSystem` static class) |
-| Date range | Starts 2023, 20 years (→ 2042) → start 2000, cover to 2050 |
-| Hardcoded output path | `C:\Temp\holidays.sql` → accept output path as command-line arg |
-| Target table | `dbo.stat_holiday` → `Dimension.StatHolidays` with updated schema |
-| BC conventions | Already correct: includes Easter Monday + Boxing Day; handles in-lieu |
+### Required changes
 
-**Updated Nager.Date 3.x usage pattern:**
+| Area | Current state | Required state |
+|---|---|---|
+| .NET target | .NET 6 | .NET 8 |
+| Nager.Date version | 1.46.0 | 3.x |
+| API class | `HolidayClient` (removed in v3) | `DateSystem` static class |
+| Date range | 2023–2042 | 2000–2050 |
+| Output path | Hardcoded `C:\Temp\holidays.sql` | CLI argument `args[0]` |
+| Target table | `[dbo].[stat_holiday]` | `[Dimension].[StatHolidays]` |
+| Province filter | `countryCode = "CA"`, filter `provinceCode = "BC"` | `DateSystem.GetPublicHolidays(year, "CA")` then filter `Subdivisions.Contains("CA-BC")` |
+| Easter Monday / Boxing Day | Custom additions | Still required — add manually if Nager omits them |
+| In-lieu logic | Custom Saturday/Sunday → weekday shift | Keep as-is (already correct) |
+
+### New API pattern (Nager.Date 3.x)
+
 ```csharp
-// Nager.Date 3.x uses DateSystem static class instead of HolidayClient
-var holidays = DateSystem.GetPublicHolidays(year, CountryCode.CA);
-// Filter for BC: holiday.Counties == null || holiday.Counties.Contains("CA-BC")
+using Nager.Date;
+
+var holidays = DateSystem.GetPublicHolidays(year, "CA")
+    .Where(h => h.SubdivisionCodes == null
+             || h.SubdivisionCodes.Contains("CA-BC"))
+    .OrderBy(h => h.Date)
+    .ToList();
 ```
 
-**Target MERGE statement for updated output:**
+### MERGE target change
+
+Output file header changes from:
 ```sql
-MERGE [Dimension].[StatHolidays] AS Target
-USING @tbl AS Source
-ON Source.holidayDate = Target.[Stat Holiday Date]
-WHEN NOT MATCHED BY TARGET THEN
-    INSERT ([Stat Holiday Date], [Stat Holiday Date Key], [Stat Holiday Name])
-    VALUES (
-        Source.holidayDate,
-        YEAR(Source.holidayDate)*10000
-            + MONTH(Source.holidayDate)*100
-            + DAY(Source.holidayDate),
-        Source.holidayName
-    );
+MERGE [dbo].[stat_holiday] AS [target]
 ```
+to:
+```sql
+MERGE [Dimension].[StatHolidays] AS [target]
+USING (VALUES ...) AS [source] ([Stat Holiday Date], [Stat Holiday Name])
+ON [target].[Stat Holiday Date] = [source].[Stat Holiday Date]
+```
+
+> Note: The join is now on `DATE` type. No integer date key column needed.
 
 ---
 
 ## 7. Fiscal Year Quick Reference
 
-| Calendar Date | FY | Fiscal Period | Fiscal Quarter |
+| Calendar months | Fiscal Year label | Fiscal Periods | Fiscal Quarters |
 |---|---|---|---|
-| Apr 1, 2024 | FY2024 | P01 | Q1 |
-| Jun 30, 2024 | FY2024 | P03 | Q1 |
-| Jul 1, 2024 | FY2024 | P04 | Q2 |
-| Sep 30, 2024 | FY2024 | P06 | Q2 |
-| Oct 1, 2024 | FY2024 | P07 | Q3 |
-| Dec 31, 2024 | FY2024 | P09 | Q3 |
-| Jan 1, 2025 | FY2024 | P10 | Q4 |
-| Mar 31, 2025 | FY2024 | P12 | Q4 |
-| Apr 1, 2025 | FY2025 | P01 | Q1 |
+| Apr 2023 – Jun 2023 | FY2023 | P1–P3 | Q1 |
+| Jul 2023 – Sep 2023 | FY2023 | P4–P6 | Q2 |
+| Oct 2023 – Dec 2023 | FY2023 | P7–P9 | Q3 |
+| Jan 2024 – Mar 2024 | FY2023 | P10–P12 | Q4 |
+| Apr 2024 – Jun 2024 | FY2024 | P1–P3 | Q1 |
+| Jul 2024 – Sep 2024 | FY2024 | P4–P6 | Q2 |
+| Oct 2024 – Dec 2024 | FY2024 | P7–P9 | Q3 |
+| Jan 2025 – Mar 2025 | FY2024 | P10–P12 | Q4 |
+
+> FY2024 starts April 1, 2024 and ends March 31, 2025. Label = **starting** year.
 
 ---
 
 ## 8. Deployment Checklist
 
-- [ ] `Dimension.StatHolidays` table created (Section 1)
-- [ ] `Dimension.Calendar` table created (Section 2)
-- [ ] `Dimension.PopulateCalendar` SP created and executed — verify row count:
-  ```sql
-  SELECT COUNT(*) FROM [Dimension].[Calendar];  -- expected: 18629 (18628 dates + 1 unknown)
-  ```
-- [ ] Fiscal year boundary spot-check:
-  ```sql
-  SELECT [Date Key], [Date], [Fiscal Year], [Fiscal Year Label], [Fiscal Month], [Fiscal Quarter]
-  FROM [Dimension].[Calendar]
-  WHERE [Date] IN ('2024-03-31','2024-04-01','2024-12-31','2025-01-01','2025-03-31','2025-04-01')
-  ORDER BY [Date Key];
-  -- Expected FY: 2023, 2024, 2024, 2024, 2024, 2025
-  ```
-- [ ] Run updated StatHolidayGenerator (Section 6) and execute its output against `Dimension.StatHolidays`
-- [ ] `SSAS.v_Calendar` view created (Section 4) — test:
-  ```sql
-  SELECT TOP 5 [Date], [Is Stat Holiday], [Stat Holiday Name], [Is Working Day]
-  FROM [SSAS].[v_Calendar]
-  WHERE [Date] BETWEEN '2025-04-01' AND '2025-04-25'
-    AND [Is Stat Holiday] = 1;
-  ```
-- [ ] SSAS Tabular model: partition source → `SELECT * FROM [SSAS].[v_Calendar]`
-- [ ] Date table marking applied in Tabular Editor (Section 5)
-- [ ] Sort-by columns assigned (Section 5)
-- [ ] Hidden columns set and display folders applied (Section 5)
-- [ ] Extended properties generated via Mode C and deployed in DACPAC post-deploy script
+```
+[ ] 1. Populate Dimension.StatHolidays first (MERGE from updated generator output)
+[ ] 2. Execute Dimension.PopulateCalendar
+[ ] 3. Validate row count: SELECT COUNT(*) FROM Dimension.Calendar  → expect 18,628 + 2 sentinels
+[ ] 4. Verify sentinel rows present:
+        SELECT [Date Key] FROM Dimension.Calendar
+        WHERE [Date Key] IN ('1900-01-01', '9999-12-31')
+[ ] 5. Spot-check fiscal year labels:
+        SELECT [Date Key], [Fiscal Year], [Fiscal Year Name], [Fiscal Period]
+        FROM Dimension.Calendar
+        WHERE [Date Key] IN ('2024-03-31', '2024-04-01', '2025-03-31', '2025-04-01')
+[ ] 6. Validate stat holidays:
+        SELECT [Date Key], [Is Stat Holiday], [Stat Holiday Name]
+        FROM Dimension.Calendar
+        WHERE [Is Stat Holiday] = 1 AND YEAR([Date Key]) = 2024
+        ORDER BY [Date Key]
+[ ] 7. Validate pay weeks:
+        SELECT TOP 10 [Date Key], [Is Pay Week] FROM Dimension.Calendar
+        WHERE [Is Pay Week] = 1 ORDER BY [Date Key]
+[ ] 8. Check YYYYMMDD and YYYYMM:
+        SELECT [Date Key], [YYYYMMDD], [YYYYMM]
+        FROM Dimension.Calendar
+        WHERE [Date Key] IN ('2024-04-15', '2025-01-01')
+[ ] 9. Import SSAS.v_Calendar into SSAS Tabular model
+[ ] 10. Mark as Date Table → Date Column: [Date Key]
+[ ] 11. Configure sort-by columns (see Section 5)
+[ ] 12. Hide numeric key columns (see Section 5)
+[ ] 13. Arrange into display folders (see Section 5)
+[ ] 14. Verify time intelligence functions work in DAX (e.g., TOTALYTD, DATEADD)
+```

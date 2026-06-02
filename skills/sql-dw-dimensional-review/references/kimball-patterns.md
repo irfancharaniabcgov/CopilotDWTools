@@ -101,9 +101,12 @@ Full history tracking. New row per change. Surrogate key FK in fact table.
 
 ```sql
 -- Minimal Date Dimension scaffold
+-- NOTE: [Date Key] is DATE (not INT YYYYMMDD). [YYYYMMDD] INT is a separate column
+-- for legacy joins and sort keys. All fact table date FK columns must also be DATE.
 CREATE TABLE [Dimension].[Calendar] (
-    DateKey        INT           NOT NULL PRIMARY KEY,  -- YYYYMMDD
-    FullDate       DATE          NOT NULL,
+    [Date Key]     DATE          NOT NULL PRIMARY KEY,  -- DATE type; matches OLTP convention
+    [YYYYMMDD]     INT           NULL,                  -- 20240415 — for sort keys and legacy joins
+    [YYYYMM]       CHAR(6)       NULL,                  -- '202404'
     DayOfWeek      TINYINT       NOT NULL,
     DayName        VARCHAR(10)   NOT NULL,
     WeekOfYear     TINYINT       NOT NULL,
@@ -153,11 +156,11 @@ Example: `[Dimension].[Calendar]` plays `OrderDateKey`, `ShipDateKey`, `DueDateK
 In SSAS Tabular: create inactive relationships; activate with `USERELATIONSHIP()`.
 
 ```sql
--- Fact table with role-playing date keys
+-- Fact table with role-playing date keys (DATE type — matches Calendar PK)
 ALTER TABLE [Fact].[SalesOrder] ADD
-    OrderDateKey   INT NOT NULL REFERENCES [Dimension].[Calendar](DateKey),
-    ShipDateKey    INT     NULL REFERENCES [Dimension].[Calendar](DateKey),
-    DueDateKey     INT     NULL REFERENCES [Dimension].[Calendar](DateKey);
+    [Order Date Key]  DATE NOT NULL REFERENCES [Dimension].[Calendar]([Date Key]),
+    [Ship Date Key]   DATE     NULL REFERENCES [Dimension].[Calendar]([Date Key]),
+    [Due Date Key]    DATE     NULL REFERENCES [Dimension].[Calendar]([Date Key]);
 ```
 
 ### Junk Dimension

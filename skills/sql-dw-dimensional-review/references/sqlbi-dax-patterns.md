@@ -242,7 +242,7 @@ The Events in Progress pattern counts entities that are active (in progress) on 
 ### Pattern
 ```dax
 Events In Progress =
-VAR SelectedDateKey = MAX( 'Calendar'[Date Key] )   -- integer date key from current filter context
+VAR SelectedDateKey = MAX( 'Calendar'[Date Key] )   -- DATE type date key from current filter context
 RETURN
 CALCULATE(
     COUNTROWS( 'Fact Active Events' ),   -- replace with your fact/snapshot table name
@@ -250,7 +250,7 @@ CALCULATE(
         ALL( 'Fact Active Events' ),
         'Fact Active Events'[Start Date Key] <= SelectedDateKey
         && (
-            'Fact Active Events'[End Date Key] = -1   -- -1 = still open (unknown member convention)
+            'Fact Active Events'[End Date Key] = DATE(9999, 12, 31)   -- DATE(9999,12,31) = still open (sentinel convention)
             || 'Fact Active Events'[End Date Key] >= SelectedDateKey
         )
     )
@@ -341,7 +341,7 @@ Classifies entities (customers, projects, clients) as: New, Returning, Lost, or 
 -- 'Customer'[First Activity Date Key] = MINX(RELATEDTABLE('Fact Sales Transaction'), 'Fact Sales Transaction'[Date Key])
 
 New Entities =
-VAR MinDateKeyInPeriod = MIN( 'Calendar'[Date Key] )   -- integer date key
+VAR MinDateKeyInPeriod = MIN( 'Calendar'[Date Key] )   -- DATE type date key
 RETURN
 CALCULATE(
     DISTINCTCOUNT( 'Fact Sales Transaction'[Customer Key] ),

@@ -50,7 +50,7 @@ GROUP BY s.name, t.name ORDER BY EstRows DESC;
 | Dimension attributes have human-readable labels | 🟡 | |
 | [Dimension].[Calendar] covers min(fact date) − 5yr to today + 3yr | 🔴 | Gaps break time intelligence |
 | [Dimension].[Calendar] marked as Date Table in SSAS | 🔴 | Required for DATESYTD, SAMEPERIODLASTYEAR, etc. |
-| [Dimension].[Calendar].[DateKey] is INT YYYYMMDD (not date/datetime) | 🟡 | |
+| [Dimension].[Calendar].[Date Key] is DATE type (not INT YYYYMMDD); [YYYYMMDD] INT available as separate column | 🟡 | |
 | [Dimension].[Calendar] FiscalYear/Quarter/Month populated if non-calendar FY used | 🟡 | |
 | Large dimensions (>1M rows) reviewed for SSAS memory impact | 🟡 | |
 

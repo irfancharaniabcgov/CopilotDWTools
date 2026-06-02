@@ -59,18 +59,18 @@ The SSAS layer exposes `[ABC Category]` as a plain slicer attribute. No DAX requ
 
 #### Events in Progress → `Snapshots.ActiveEventsDaily` periodic snapshot
 
-Instead of `FILTER(ALL('Fact Events'), [Start Date Key] <= SelectedDate && ([End Date Key] >= SelectedDate || [End Date Key] = -1))`, load a daily snapshot:
+Instead of `FILTER(ALL('Fact Events'), [Start Date Key] <= SelectedDate && ([End Date Key] >= SelectedDate || [End Date Key] = DATE(9999,12,31)))`, load a daily snapshot:
 
 ```sql
 -- Snapshots.LoadActiveEventsDaily — run nightly via SQL Agent
 INSERT INTO Snapshots.ActiveEventsDaily (SnapshotDateKey, EventKey, [other dimensions...])
 SELECT
-    CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) AS SnapshotDateKey,
+    CAST(GETDATE() AS DATE) AS SnapshotDateKey,
     EventKey,
     [other dimensions...]
 FROM Fact.Event
-WHERE StartDateKey <= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT)
-  AND (EndDateKey >= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) OR EndDateKey = -1);  -- -1 = still open (unknown member)
+WHERE StartDateKey <= CAST(GETDATE() AS DATE)
+  AND (EndDateKey >= CAST(GETDATE() AS DATE) OR EndDateKey = '9999-12-31');  -- '9999-12-31' = still open (sentinel convention)
 ```
 
 The DAX measure becomes `COUNTROWS( 'Snapshots Active Events Daily' )` — simple and fast.
@@ -900,7 +900,7 @@ BEGIN
             s.Quantity * s.UnitPrice - ISNULL(s.DiscountAmount, 0),
             @LineageKey
         FROM [Staging].[SalesOrder] s
-        LEFT JOIN [Dimension].[Calendar] cal ON cal.DateKey = CONVERT(INT, CONVERT(NVARCHAR(8), s.OrderDate, 112))
+        LEFT JOIN [Dimension].[Calendar] cal ON cal.[Date Key] = CAST(s.OrderDate AS DATE)
         LEFT JOIN [Dimension].[Customer] c ON c._SourceCustomerID = s._SourceCustomerID AND c.IsCurrent = 1
         LEFT JOIN [Dimension].[Product] p ON p._SourceProductID = s._SourceProductID AND p.IsCurrent = 1;
 
