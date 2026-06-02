@@ -2,6 +2,8 @@
 
 Patterns used in most or all projects. The agent references this file for every DAX review (Mode D) and every DAX build (Mode L).
 
+> **Upstream-First (Roche's Maxim):** Before implementing any pattern below, ask whether the transformation belongs upstream in SQL. A well-designed dimension with a pre-computed `ABC Category` column eliminates ABC DAX entirely. A `Snapshots.ActiveEventsDaily` fact table turns Events in Progress into `COUNTROWS()`. The ideal DAX measure is `SUM` / `COUNTROWS` / `DIVIDE`. Complex DAX is a last resort — document the reason in the measure `Description` when it cannot be avoided.
+
 ---
 
 ## 1. Time Intelligence Patterns
@@ -240,16 +242,16 @@ The Events in Progress pattern counts entities that are active (in progress) on 
 ### Pattern
 ```dax
 Events In Progress =
-VAR SelectedDate = MAX( 'Calendar'[Date] )
+VAR SelectedDateKey = MAX( 'Calendar'[Date Key] )   -- integer date key from current filter context
 RETURN
 CALCULATE(
-    COUNTROWS( 'Fact.ActiveEvents' ),    -- replace with your fact/snapshot table
+    COUNTROWS( 'Fact Active Events' ),   -- replace with your fact/snapshot table name
     FILTER(
-        ALL( 'Fact.ActiveEvents' ),
-        'Fact.ActiveEvents'[Start Date Key] <= RELATED( 'Calendar'[DateKey] )
+        ALL( 'Fact Active Events' ),
+        'Fact Active Events'[Start Date Key] <= SelectedDateKey
         && (
-            'Fact.ActiveEvents'[End Date Key] = -1   -- still open
-            || 'Fact.ActiveEvents'[End Date Key] >= RELATED( 'Calendar'[DateKey] )
+            'Fact Active Events'[End Date Key] = -1   -- -1 = still open (unknown member convention)
+            || 'Fact Active Events'[End Date Key] >= SelectedDateKey
         )
     )
 )
@@ -334,27 +336,27 @@ Classifies entities (customers, projects, clients) as: New, Returning, Lost, or 
 
 ### Pattern
 ```dax
--- Helper: first activity date per entity
+-- Helper: first activity date key per entity
 -- Best implemented as a calculated column on the dimension:
--- 'Customer'[First Activity Date Key] = MINX(RELATEDTABLE('Fact.SalesTransaction'), 'Fact.SalesTransaction'[DateKey])
+-- 'Customer'[First Activity Date Key] = MINX(RELATEDTABLE('Fact Sales Transaction'), 'Fact Sales Transaction'[Date Key])
 
 New Entities =
-VAR MinDateInPeriod = MIN( 'Calendar'[Date] )
+VAR MinDateKeyInPeriod = MIN( 'Calendar'[Date Key] )   -- integer date key
 RETURN
 CALCULATE(
-    DISTINCTCOUNT( 'Fact SalesTransaction'[Customer Key] ),
+    DISTINCTCOUNT( 'Fact Sales Transaction'[Customer Key] ),
     FILTER(
         VALUES( 'Customer'[Customer Key] ),
-        CALCULATE( MIN( 'Fact SalesTransaction'[Date Key] ) ) >= MinDateInPeriod
+        CALCULATE( MIN( 'Fact Sales Transaction'[Date Key] ) ) >= MinDateKeyInPeriod
     )
 )
 
 Returning Entities =
 CALCULATE(
-    DISTINCTCOUNT( 'Fact SalesTransaction'[Customer Key] ),
+    DISTINCTCOUNT( 'Fact Sales Transaction'[Customer Key] ),
     FILTER(
         VALUES( 'Customer'[Customer Key] ),
-        CALCULATE( MIN( 'Fact SalesTransaction'[Date Key] ) ) < MIN( 'Calendar'[Date] )
+        CALCULATE( MIN( 'Fact Sales Transaction'[Date Key] ) ) < MIN( 'Calendar'[Date Key] )
     )
 )
 ```

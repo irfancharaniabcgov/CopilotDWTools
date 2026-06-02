@@ -17,12 +17,15 @@ skills/
   sql-dw-dimensional-review/
     SKILL.md                           — Core skill entry point (Modes A–N)
     references/
-      kimball-patterns.md             — Kimball dimensional modeling + org naming conventions + snapshot patterns
-      sqlbi-dax-patterns.md           — SQLBI/DAX Patterns (time intelligence, semi-additive, M2M, etc.)
+      kimball-patterns.md             — Kimball dimensional modeling core: fact/dim design, SCD types, bus matrix
+      kimball-advanced-patterns.md    — Advanced patterns: Data Vault bridging, late-arriving, physical design, snapshot DDL
+      sqlbi-dax-patterns.md           — SQLBI/DAX Patterns core: time intelligence, semi-additive, M2M, upstream-first guide
+      sqlbi-dax-patterns-advanced.md  — Medium-likelihood DAX patterns: paginated reports, what-if, dynamic security
+      sqlbi-dax-patterns-niche.md     — Niche DAX patterns: currency conversion, survey/weighted avg (use rarely)
       ssas-tabular-bp.md              — SSAS Tabular best practices + BPA rules + SSAS schema view contract
       extended-properties-templates.md — sp_addextendedproperty T-SQL templates
       dw-review-checklist.md          — End-to-end DW/SSAS/PBIRS review checklist
-      elt-patterns.md                 — SSIS ELT patterns + Internal.Lineage DDL + SSIS package standards
+      elt-patterns.md                 — SSIS ELT patterns + upstream-first examples + Internal.Lineage DDL
       devops-deployment-patterns.md   — ADO Classic pipeline configurations + ALM Toolkit workflow
       pbirs-constraints.md            — Power BI Report Server constraints and design rules
       pbix-report-standards.md        — PBIX report standards (Debug tab, table descriptions, measure format)
@@ -32,7 +35,7 @@ skills/
       tabular-editor-2-automation.md  — TE2 CLI flags, C# scripts library, BPA rule JSON
       ssas-deployment-processing.md   — TE2 deploy commands, processing modes, SQL Agent job pattern
       dw-validation-patterns.md       — T-SQL validation queries (orphan facts, unknown members, reconciliation)
-      dax-style-guide.md              — DAX coding standard (naming, formatting, VAR/RETURN, anti-patterns)
+      dax-style-guide.md              — DAX coding standard (naming, formatting, VAR/RETURN, upstream-first principle)
       dax-studio-workflow.md          — DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking workflow
 ```
 

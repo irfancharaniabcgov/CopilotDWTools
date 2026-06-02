@@ -8,6 +8,94 @@
 
 ---
 
+## Upstream-First Design Philosophy (Roche's Maxim)
+
+> **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
+
+ELT is the practical realisation of this principle. The patterns in this file define where each class
+of transformation belongs. When reviewing a pipeline or designing a new load, always place each
+transformation at the highest applicable tier:
+
+| Tier | Location | Typical transformations |
+|---|---|---|
+| 1 | Staging SP (`Staging.Load*`) | Type casting, null coalescing, deduplication, source key normalisation, lineage stamp |
+| 2 | Dimension load SP (`Dimension.Load*`) | SCD logic, derived attributes (ABC class, age band, tenure band), surrogate key assignment |
+| 3 | Fact load SP (`Fact.Load*`) | Degenerate dimensions, late-arriving grain resolution, currency conversion at load time |
+| 4 | DW computed column | Simple deterministic derivations (fiscal year, quarter label) — use sparingly |
+| 5 | SSAS calculated column | Display-only derivations that must exist in the model |
+| 6 | DAX measure | Ad-hoc aggregations in filter context — last resort |
+
+### Upstream Computation Examples
+
+The following patterns are commonly attempted in DAX but belong upstream:
+
+#### ABC Classification → `Dimension.LoadProduct` SP column
+
+Instead of a DAX rank/SWITCH measure, add a persisted column during the dimension load:
+
+```sql
+-- In Dimension.LoadProduct (after surrogates are assigned)
+UPDATE Dimension.Product
+SET ABCCategory =
+    CASE
+        WHEN CumulativeRevenueRank <= 0.70 THEN 'A'
+        WHEN CumulativeRevenueRank <= 0.90 THEN 'B'
+        ELSE 'C'
+    END
+FROM (
+    SELECT
+        ProductKey,
+        SUM(SalesAmount) AS TotalRevenue,
+        SUM(SUM(SalesAmount)) OVER () AS GrandTotal,
+        SUM(SUM(SalesAmount)) OVER (ORDER BY SUM(SalesAmount) DESC
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) / NULLIF(SUM(SUM(SalesAmount)) OVER (), 0) AS CumulativeRevenueRank
+    FROM Fact.SalesTransaction
+    GROUP BY ProductKey
+) ranked
+WHERE Dimension.Product.ProductKey = ranked.ProductKey;
+```
+
+The SSAS layer exposes `[ABC Category]` as a plain slicer attribute. No DAX required.
+
+#### Events in Progress → `Snapshots.ActiveEventsDaily` periodic snapshot
+
+Instead of `FILTER(ALL('Fact Events'), [Start Date Key] <= SelectedDate && ([End Date Key] >= SelectedDate || [End Date Key] = 0))`, load a daily snapshot:
+
+```sql
+-- Snapshots.LoadActiveEventsDaily — run nightly via SQL Agent
+INSERT INTO Snapshots.ActiveEventsDaily (SnapshotDateKey, EventKey, [other dimensions...])
+SELECT
+    CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) AS SnapshotDateKey,
+    EventKey,
+    [other dimensions...]
+FROM Fact.Event
+WHERE StartDateKey <= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT)
+  AND (EndDateKey >= CAST(CONVERT(VARCHAR(8), GETDATE(), 112) AS INT) OR EndDateKey = 0);
+```
+
+The DAX measure becomes `COUNTROWS( 'Snapshots Active Events Daily' )` — simple and fast.
+
+#### Budget Allocation (daily spreading) → `Fact.BudgetAllocated`
+
+Instead of DAX dividing monthly budget by days-in-month, pre-spread during the fact load:
+
+```sql
+-- Fact.LoadBudgetAllocated — runs after source budget is loaded to staging
+INSERT INTO Fact.BudgetAllocated (DateKey, DepartmentKey, CostCentreKey, BudgetAmount)
+SELECT
+    c.DateKey,
+    b.DepartmentKey,
+    b.CostCentreKey,
+    b.MonthlyBudget / NULLIF(c.WorkingDaysInMonth, 0) AS BudgetAmount
+FROM Staging.Budget b
+JOIN Dimension.Calendar c
+    ON c.Year = b.BudgetYear AND c.MonthNumber = b.BudgetMonth;
+```
+
+The DAX measure becomes `SUM( 'Fact Budget Allocated'[Budget Amount] )` — no division in DAX.
+
+---
+
 ## Architecture Overview
 
 ```

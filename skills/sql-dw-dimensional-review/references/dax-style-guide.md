@@ -2,6 +2,19 @@
 
 This guide defines the organisation DAX coding standard for SSAS Tabular models. Copilot agents must apply this standard when generating DAX measures, reviewing DAX measures, or reviewing SSAS Tabular models. Every generated measure must conform to these rules.
 
+## Guiding Design Philosophy — Upstream-First (Roche's Maxim)
+
+> **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
+
+This is the single most important principle governing DAX authorship in this organisation:
+
+- **Simple DAX is good DAX.** The best measure is `SUM`, `COUNTROWS`, or `DIVIDE`. If you reach for `FILTER(ALL(...))` or nested `CALCULATE`, first ask whether the model shape is wrong.
+- **Complex calculations belong in SQL first.** If a measure is computing something that could be a column in the DW load SP or an SSAS calculated column, push it upstream.
+- **Upstream preference order:** Staging SP → Dimension/Fact load SP → DW computed column → SSAS calculated column → DAX measure.
+- **Document exceptions.** When complex DAX is genuinely necessary (e.g., ad-hoc time window that cannot be pre-computed), document the reason in the measure `Description` field.
+
+Apply this lens during every DAX review: if a measure could be simplified by a model design change, flag it as a design issue alongside the DAX finding.
+
 ### Organisational conventions
 
 - SSAS Tabular only.

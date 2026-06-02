@@ -92,7 +92,7 @@ SWITCH( SELECTEDVALUE( DimKPI[KPIKey] ),
 ```dax
 Product Sales Rank :=
 IF( ISBLANK( [Total Sales] ), BLANK(),
-    RANKX( ALLSELECTED( DimProduct[ProductName] ), [Total Sales],, DESC, DENSE ) )
+    RANKX( ALLSELECTED( 'Product'[Product Name] ), [Total Sales],, DESC, DENSE ) )
 
 -- Top N filter (use in visual-level filter: [Is Top N] = 1)
 Is Top N :=
@@ -137,7 +137,7 @@ Unsafe Ratio := [Numerator] / [Denominator]
 
 -- IFERROR for lookup fallbacks
 Safe Lookup :=
-IFERROR( LOOKUPVALUE( DimProduct[StandardCost], DimProduct[ProductKey], MAX( Sales[ProductKey] ) ), 0 )
+IFERROR( LOOKUPVALUE( 'Product'[Standard Cost], 'Product'[Product Key], MAX( 'Fact Sales'[Product Key] ) ), 0 )
 
 -- ISBLANK (preferred over = BLANK() for measures)
 Has Sales := NOT ISBLANK( [Total Sales] )
@@ -145,10 +145,10 @@ Has Sales := NOT ISBLANK( [Total Sales] )
 -- COALESCE: first non-blank value (CL 1550+ / SSAS 2022 only)
 -- For CL 1500: use nested IF( ISBLANK(...), ..., ... ) instead
 Effective Price        := COALESCE( [Override Price], [Standard Price], 0 )
-Product Category Safe  := COALESCE( SELECTEDVALUE( DimProduct[Category] ), "Unknown" )
+Product Category Safe  := COALESCE( SELECTEDVALUE( 'Product'[Category] ), "Unknown" )
 
 -- Return BLANK (not 0) for no-match rows — cleaner in visuals
-Total Sales (Clean) := IF( COUNTROWS( Sales ) = 0, BLANK(), SUM( Sales[SalesAmount] ) )
+Total Sales (Clean) := IF( COUNTROWS( 'Fact Sales' ) = 0, BLANK(), SUM( 'Fact Sales'[Sales Amount] ) )
 ```
 
 ---
@@ -174,8 +174,8 @@ CREATE TABLE [Fact].[Sales_Agg_MonthRegion] (
 INSERT INTO [Fact].[Sales_Agg_MonthRegion]
 SELECT d.MonthKey, f.RegionKey, p.CategoryKey,
     SUM(f.SalesAmount), SUM(f.CostAmount), SUM(f.Units)
-FROM dbo.Sales f
-JOIN dbo.Calendar    d ON f.DateKey    = d.DateKey
+FROM [Fact].[Sales] f
+JOIN [Dimension].[Calendar] d ON f.DateKey    = d.DateKey
 JOIN [Dimension].[Product] p ON f.ProductKey = p.ProductKey
 GROUP BY d.MonthKey, f.RegionKey, p.CategoryKey;
 ```
@@ -201,30 +201,30 @@ Use `@ParamName` syntax in SSRS dataset query text mode. Use integer year/month 
 EVALUATE
 CALCULATETABLE(
     SUMMARIZECOLUMNS(
-        DimProduct[ProductName], DimProduct[Category],
+        'Product'[Product Name], 'Product'[Category],
         Calendar[CalendarYear], Calendar[MonthName],
         "Total Sales", [Total Sales], "Total Cost", [Total Cost],
         "Gross Profit", [Gross Profit], "Units Sold", [Units Sold]
     ),
     Calendar[Date] >= DATE(@StartYear, @StartMonth, 1),
-    Calendar[Date] <= DATE(@EndYear, @EndMonth, 31)
+    Calendar[Date] <= EOMONTH( DATE( @EndYear, @EndMonth, 1 ), 0 )  -- EOMONTH handles months shorter than 31 days
 )
-ORDER BY Calendar[CalendarYear], Calendar[MonthName], DimProduct[ProductName]
+ORDER BY Calendar[CalendarYear], Calendar[MonthName], 'Product'[Product Name]
 
 -- Measure selector (@MeasureSelector: 1=Sales, 2=Cost, 3=Profit)
 EVALUATE CALCULATETABLE(
-    ADDCOLUMNS( SUMMARIZE( DimProduct, DimProduct[ProductName], DimProduct[Category] ),
+    ADDCOLUMNS( SUMMARIZE( 'Product', 'Product'[Product Name], 'Product'[Category] ),
         "Value", SWITCH( @MeasureSelector, 1, [Total Sales], 2, [Total Cost], 3, [Gross Profit], [Total Sales] ) ) )
 
 -- Cascading param: years with data
-EVALUATE SUMMARIZECOLUMNS( Calendar[CalendarYear], "HasData", CALCULATE( COUNTROWS( Sales ) ) )
+EVALUATE SUMMARIZECOLUMNS( Calendar[CalendarYear], "HasData", CALCULATE( COUNTROWS( 'Fact Sales' ) ) )
 ORDER BY Calendar[CalendarYear] ASC
 
 -- Cascading: regions for selected year
 EVALUATE CALCULATETABLE(
-    SUMMARIZECOLUMNS( DimRegion[RegionName], DimRegion[RegionKey] ),
+    SUMMARIZECOLUMNS( 'Region'[Region Name], 'Region'[Region Key] ),
     Calendar[CalendarYear] = @SelectedYear )
-ORDER BY DimRegion[RegionName]
+ORDER BY 'Region'[Region Name]
 ```
 
 ---
@@ -249,16 +249,16 @@ Bad  (FE-dominant): Total 3200ms | SE 80ms | FE 3120ms (98%) | SE Queries: 847
 
 ```dax
 -- ❌ FILTER with measure — FE per row (CallbackDataID)
-CALCULATE( [Total Sales], FILTER( DimProduct, [Product Margin %] > 0.2 ) )
+CALCULATE( [Total Sales], FILTER( 'Product', [Product Margin %] > 0.2 ) )
 
 -- ✅ FILTER with column — stays in SE
-CALCULATE( [Total Sales], FILTER( DimProduct, DimProduct[StandardMargin] > 0.2 ) )
+CALCULATE( [Total Sales], FILTER( 'Product', 'Product'[Standard Margin] > 0.2 ) )
 
 -- ❌ SUMX + LOOKUPVALUE per row — FE
-SUMX( Sales, Sales[Qty] * LOOKUPVALUE( DimProduct[Price], DimProduct[ProductKey], Sales[ProductKey] ) )
+SUMX( 'Fact Sales', 'Fact Sales'[Qty] * LOOKUPVALUE( 'Product'[Price], 'Product'[Product Key], 'Fact Sales'[Product Key] ) )
 
 -- ✅ Pre-calculated column or relationship
-Fast SUM := SUM( Sales[PreCalcRevenue] )
+Fast SUM := SUM( 'Fact Sales'[Pre Calc Revenue] )
 ```
 
 **VertiPaq compression tips:**
@@ -279,20 +279,20 @@ ORDER BY USED_SIZE DESC
 ## 19. Bus Matrix Validation in DAX
 
 ```dax
--- Verify DimProduct conforms across both fact tables
+-- Verify Product conforms across both fact tables
 Product in Sales Count :=
-CALCULATE( DISTINCTCOUNT( Sales[ProductKey] ), ALLEXCEPT( DimProduct, DimProduct[ProductKey] ) )
+CALCULATE( DISTINCTCOUNT( 'Fact Sales'[Product Key] ), ALLEXCEPT( 'Product', 'Product'[Product Key] ) )
 
 Product in Returns Count :=
-CALCULATE( DISTINCTCOUNT( FactReturns[ProductKey] ), ALLEXCEPT( DimProduct, DimProduct[ProductKey] ) )
+CALCULATE( DISTINCTCOUNT( 'Fact Returns'[Product Key] ), ALLEXCEPT( 'Product', 'Product'[Product Key] ) )
 
 -- Orphan check: fact keys with no dimension match (run in DAX Studio)
 EVALUATE
 FILTER(
-    ADDCOLUMNS( VALUES( Sales[ProductKey] ),
-        "InDimProduct",
-        CALCULATE( COUNTROWS( DimProduct ), DimProduct[ProductKey] = EARLIER( Sales[ProductKey] ) ) ),
-    [InDimProduct] = 0
+    ADDCOLUMNS( VALUES( 'Fact Sales'[Product Key] ),
+        "In Product",
+        CALCULATE( COUNTROWS( 'Product' ), 'Product'[Product Key] = EARLIER( 'Fact Sales'[Product Key] ) ) ),
+    [In Product] = 0
 )
 ```
 

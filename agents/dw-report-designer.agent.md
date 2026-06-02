@@ -111,6 +111,17 @@ Ask all of the following questions:
 - Which measures need time intelligence? (Year-over-Year, Month-to-Date, Quarter-to-Date, Year-to-Date, Rolling 12 Months, Prior Period)
 - Does your organisation use a fiscal year or calendar year? If fiscal: what month does the fiscal year start?
 
+**After the user answers Phase 4**, apply the Upstream-First lens before designing any DAX measure:
+
+> **Upstream-First checkpoint (Roche's Maxim):** *"Data should be transformed as far upstream as possible, and as far downstream as necessary."*
+>
+> For each measure the user has described, assess:
+> - Could this be a **pre-computed column** in the dimension or fact load SP? (e.g., ABC class, age band, tenure group)
+> - Could this be answered by a **better model shape**? (e.g., a `Snapshots.*` periodic snapshot turns "events active today" from complex FILTER DAX into simple `COUNTROWS`)
+> - Could a **pre-spread fact table** eliminate complex DAX? (e.g., daily-allocated budget rows → `SUM` instead of division logic)
+>
+> Flag any measures where upstream computation is the better answer. Document the recommendation in the design spec as a DW schema requirement, not a DAX requirement. Only retain complex DAX when the calculation genuinely must run in filter context at report time.
+
 ---
 
 ### Phase 5 — Dimensions & Filters

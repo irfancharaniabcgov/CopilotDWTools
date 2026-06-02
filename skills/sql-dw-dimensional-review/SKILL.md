@@ -14,6 +14,31 @@ configuration, and deployment artifact you generate **must be executable from a 
 no manual interaction**. Before finalizing any output, validate it against the deployment checklist
 in `references/devops-deployment-patterns.md` Section 9.
 
+## Upstream-First Design Philosophy (Roche's Maxim)
+
+> **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
+
+Before recommending a DAX pattern (Modes D and L), always ask: *does this transformation belong upstream?*
+
+**Upstream preference order** (most preferred → least preferred):
+
+| Tier | Location | Example |
+|---|---|---|
+| 1 | Staging SP (`Staging.Load*`) | Cleaning, type casting, deduplication |
+| 2 | Dimension/Fact load SP (`Dimension.Load*`, `Fact.Load*`) | SCD logic, derived columns, ABC classification |
+| 3 | DW calculated column (`ALTER TABLE … ADD … AS …`) | Simple fixed derivations only |
+| 4 | SSAS calculated column (in TMDL) | Display-only derivations on the Tabular layer |
+| 5 | DAX measure | Last resort — only for aggregations that cannot exist at a fixed row level |
+
+**Practical examples of upstream-first thinking:**
+
+- **ABC classification** → compute as a column in `Dimension.LoadProduct` SP; expose as a slicer attribute. Never compute in DAX.
+- **Events in Progress** → if run frequently, create `Snapshots.ActiveEventsDaily` (periodic snapshot); then the measure becomes `COUNTROWS()` instead of `FILTER(ALL(...))`.
+- **Budget allocation (daily spreading)** → pre-allocate rows in `Fact.BudgetAllocated`; daily budget becomes `SUM([Budget Amount])` instead of complex DAX division.
+- **Running Total** → if always scoped to a single dimension, consider a DW-layer cumulative column refreshed nightly; DAX CALCULATE + FILTER is valid only when ad-hoc slicing is required.
+
+When you find yourself writing a DAX measure longer than 15 lines, pause and assess whether the problem can be solved at a higher tier. Document the reason in the measure `Description` if DAX is the correct final answer (e.g., "Requires ad-hoc time window — cannot be pre-computed upstream").
+
 ## When to Activate This Skill
 
 Activate when the user asks to:

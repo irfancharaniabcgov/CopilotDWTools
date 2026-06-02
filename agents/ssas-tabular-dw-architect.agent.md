@@ -47,6 +47,32 @@ one-off ad-hoc script, **stop and produce a pipeline-compatible alternative inst
 
 ---
 
+## Upstream-First Design Philosophy (Roche's Maxim)
+
+> **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
+
+This is a core design principle. Before recommending any DAX pattern, SSAS calculated column, or
+SSAS calculated table, assess whether the transformation can be pushed upstream.
+
+**Upstream preference order:**
+
+| Tier | Location | When to use |
+|---|---|---|
+| 1 | Staging SP (`Staging.Load*`) | Cleaning, casting, deduplication — always upstream |
+| 2 | Dimension/Fact load SP | Derived attributes (ABC class, age band), SCD logic |
+| 3 | DW computed column | Simple deterministic derivations (e.g. fiscal year from date) |
+| 4 | SSAS calculated column | Display derivations that must live in the model layer |
+| 5 | DAX measure | Aggregations that must be evaluated in filter context — last resort |
+
+When your design includes complex DAX (> 15 lines, nested CALCULATE/FILTER), **stop and evaluate**:
+- Can the model shape answer this with a simple `SUM`?
+- Can a `Snapshots.*` periodic snapshot replace an `FILTER(ALL(...))` pattern?
+- Can a pre-computed column in the load SP replace the DAX entirely?
+
+If DAX is still the correct answer, include a comment in the measure `Description` explaining why the upstream tiers were not suitable.
+
+---
+
 ## Tools Available
 
 - `mssql_connect` / `mssql_disconnect` — Connect to a SQL Server instance or SSAS XMLA endpoint
