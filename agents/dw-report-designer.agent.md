@@ -126,9 +126,26 @@ Ask all of the following questions:
 Ask all of the following questions:
 
 - What should users be able to filter or slice the data by? (List all — for example: Date, Region, Department, Project, Employee, Product)
-- For each dimension: does its data change over time? (For example: an employee changes department — do you need to track the historical department they were in at the time of a transaction? If yes, this is a Slowly Changing Dimension Type 2 candidate.)
+- For each dimension: does its data change over time? (For example: an employee changes department — do you need to track the historical department they were in *at the time of a transaction*, or is today's value always sufficient?)
+  - *If history at the time of transaction matters → SCD Type 2 candidate; if current value is always fine → SCD Type 1*
 - Is there already a calendar dimension in the DW (`[Dimension].[Calendar]`)? What date columns exist in the source data that would link to it?
 - Are there any hierarchies needed? (For example: Year → Quarter → Month → Day; Region → District → Office; Portfolio → Programme → Project)
+- Does a single transaction have **multiple dates with different meanings**? (For example: a request date, an approval date, a completion date, and a due date — all on the same record) If yes, list all the dates and what they represent.
+  - *Multiple meaningful dates → role-playing Calendar dimension; the architect needs the full list to generate the correct inactive relationships*
+- Are there **multiple parties involved in a single transaction with different roles**? (For example: a case has a "created by", an "assigned to", and a "resolved by" — all employees) If yes, list all the roles.
+  - *Multiple roles from the same entity → role-playing Employee or similar dimension*
+- Are there **reference numbers** users need to filter by or look up — like a case ID, invoice number, purchase order, or work order — that have no other useful attributes (no name, no category, nothing more than the number itself)?
+  - *These become degenerate dimensions on the fact table — no separate dimension table is needed*
+- Are there **short status codes, flags, or type indicators** in the data — like Payment Method, Transaction Type, Priority, Approval Status — that don't have a full lookup table in the source system but need to be filterable in the report? List all of them.
+  - *Low-cardinality indicators with no natural home → junk dimension candidate*
+- Can a single transaction or record be associated with **more than one value from the same list at the same time**? (For example: a project tagged to multiple cost centres; a transaction linked to multiple products) If yes, describe the relationship.
+  - *Multiple values from the same dimension → many-to-many relationship, likely needs a bridge table*
+- Is there a **hierarchy where items contain other items of the same type**? (For example: employees who report to managers who report to directors — all from the same employee list; cost centres that roll up into parent cost centres) If yes, describe how deep the hierarchy goes.
+  - *Recursive/parent-child structure → flattened path columns needed in the dimension load SP*
+- Is it possible for **transactions to arrive before the related dimension record is fully set up**? (For example: a purchase order is recorded on day 1 but the supplier profile isn't completed in the source system until day 3) If yes, how often does this happen?
+  - *Late-arriving dimension members → unknown member row + handling in the load SP*
+
+*The italicised notes are not shown to the user — they are instructions for the agent to carry forward into the specification.*
 
 **If a Date/Calendar dimension is involved, also ask:**
 - Does this report need to distinguish **working days from non-working days**? (e.g. exclude weekends and holidays from day-count calculations or averages)
@@ -164,10 +181,17 @@ Ask all of the following questions:
 
 Ask all of the following questions:
 
-- How often does this data need to be refreshed? (Real-time / hourly / daily / weekly / monthly)
-- What date range of history is needed? (Last 2 years? Since the system went live? Since inception?)
+- **How stale can this data be?** Most reports in this organisation run on last night's data (nightly refresh). Is that acceptable for this report — or does it need something more frequent?
+  - *Default: nightly refresh (data loaded once per day, overnight). If the user says "I need to see today's changes" or "hourly" or similar, flag this as a non-standard refresh cadence requiring an intraday pipeline.*
+- **If a nightly refresh is not acceptable**, how frequently does the data need to be updated? (Every hour? Every 4 hours? At specific times of day — e.g., after a morning batch run at 7am?)
+- What **date range of history** is needed? (Last 2 years? Since the system went live? Since inception?)
 - How many users do you expect to be running this report, and how frequently?
-- Is there a performance SLA? (For example: "The report must load within 5 seconds for a typical filter selection")
+- Is there a **performance expectation**? (For example: "The report should load within 5 seconds for a typical filter selection") — If not stated, the default SLA for this organisation is 5 seconds for a filtered view with less than 5 million rows in the underlying fact table.
+
+*Refresh cadence implications for the architect:*
+- *Nightly → standard SQL Agent job + ADO nightly pipeline; SSAS full or incremental process nightly*
+- *Intraday (e.g., hourly) → requires a separate intraday ADO pipeline with its own schedule; SSAS partition strategy must support incremental processing without locking; source SPs must use a narrow `@StartDate`/`@EndDate` window; discuss with the user whether the extra infrastructure cost is justified before committing*
+- *Real-time → not supported by this stack (SSAS Tabular live connection does not support real-time push); redirect the user: "Real-time data is not supported by the current PBIRS + SSAS Tabular stack. The finest granularity available is hourly incremental refresh. Is hourly acceptable?"*
 
 ---
 
@@ -242,6 +266,9 @@ For each item in this table, the build modes (H, I, L) must implement the upstre
 
 ## Pipeline Changes Required
 [New ADO Classic pipeline phases or variable group entries required]
+
+**Refresh cadence**: [Nightly (default) / Intraday — every N hours / Custom schedule]
+- If intraday: list the additional pipeline(s) required, the SSAS partition strategy change needed, and any source SP window adjustments
 
 ## Build Checklist
 - [ ] Source stored procedures (Mode J)
