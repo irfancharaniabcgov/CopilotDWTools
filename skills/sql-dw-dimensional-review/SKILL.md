@@ -68,6 +68,7 @@ Activate when the user asks to:
 | `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
 | `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning decision rules, physical design checklist, shared-instance considerations |
 | `references/dw-calendar-build.md` | Dimension.Calendar DDL + population SP (2000–2050, Apr–Mar fiscal, Sunday-start weeks), Dimension.StatHolidays table, SSAS.v_Calendar view (holiday + relative date columns), SSAS Tabular configuration notes |
+| `references/security-implementation.md` | PBIRS→SSAS→DW connection chain, SQL least-privilege grants, SSAS Tabular roles (fixed + dynamic RLS), OLS patterns, PBIRS folder permission scripts, anti-patterns |
 
 ## Operating Modes
 
@@ -91,9 +92,10 @@ Activate when the user asks to:
 1. Enumerate tables, measures, columns, relationships, partitions
 2. Validate naming conventions against `ssas-tabular-bp.md`
 3. Check relationship design (bidirectional, RLS, RI flags)
-4. Check measure quality against `sqlbi-dax-patterns.md` measure checklist
-5. Check column encoding, hidden status, display folders
-6. Produce findings report using Section 3 of `dw-review-checklist.md`
+4. Check role definitions against `security-implementation.md` Section 3 patterns (fixed vs dynamic, AD group membership, OLS)
+5. Check measure quality against `sqlbi-dax-patterns.md` measure checklist
+6. Check column encoding, hidden status, display folders
+7. Produce findings report using Section 3 of `dw-review-checklist.md`
 
 ### Mode C: Extended Properties Generation
 **Input**: Schema name + object name + object type (table/column/view/SP)
@@ -177,7 +179,8 @@ Activate when the user asks to:
 5. Generate `[Last Processed {TableName}]` as a hidden column on each table (required for the Debug tab)
 6. Generate a `[_Debug]` table for the Data Freshness tab
 7. Output TMDL folder structure compatible with Tabular Editor 2 "Save as folder" (`TabularEditor.exe`)
-**Reference**: `ssas-tabular-bp.md` for all naming and structure conventions
+8. If RLS roles are required: generate role JSON stubs following `security-implementation.md` Section 3.2 pattern
+**Reference**: `ssas-tabular-bp.md` for all naming and structure conventions; `security-implementation.md` for role patterns
 
 ### Mode J: Source Stored Procedure Generation
 **Trigger**: New source tables identified in the spec
