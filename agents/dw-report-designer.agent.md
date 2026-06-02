@@ -89,6 +89,10 @@ Ask all of the following questions:
 - At the finest level of detail, what does one row in the report represent? (For example: "one transaction", "one customer per month", "one project milestone per reporting period")
 - Does the user need to drill from a summary view down to individual detail rows?
 - Are there multiple grains needed? (For example: a report header showing totals alongside a line-level detail grid — these require separate fact tables)
+- Are there things in this data that can be **open**, **active**, or **in progress** at any given point in time? (For example: open support tickets, active projects, employees currently on leave, contracts not yet closed) If yes: do users need to ask "how many were open *on a specific date*" — or only "how many *started* or *ended* during a period"?
+- If there are open/active things: is it acceptable for the report to show data as of the **previous day's close** (updated nightly), or is real-time "right now" status required?
+
+*These questions are not about the fact table grain directly — they determine whether a periodic snapshot table is more appropriate than a complex measure. Record the answers for use when drafting the specification.*
 
 **After the user answers**, restate the grain back to them in plain language:
 
@@ -110,17 +114,10 @@ Ask all of the following questions:
 - Are there calculated measures that derive from other measures? (For example: Variance = Budget − Actual, % of Total, Running Total)
 - Which measures need time intelligence? (Year-over-Year, Month-to-Date, Quarter-to-Date, Year-to-Date, Rolling 12 Months, Prior Period)
 - Does your organisation use a fiscal year or calendar year? If fiscal: what month does the fiscal year start?
+- Are there any **groupings, tiers, or classifications** that appear in the report? (For example: customer value tiers like Gold/Silver/Bronze; project health indicators like On Track / At Risk / Overdue; ABC product categories) — If yes: are these groupings **already defined by the business** with specific rules (e.g., "Gold = >$50,000 spend last year"), or does the report need to calculate them based on whatever data is currently selected?
+- Are there any **budget, target, or forecast values** in the report? If yes: at what level are these values set in the source system — monthly, quarterly, or annually? And does the report need to show them broken down to a finer level (weekly, daily)?
 
-**After the user answers Phase 4**, apply the Upstream-First lens before designing any DAX measure:
-
-> **Upstream-First checkpoint (Roche's Maxim):** *"Data should be transformed as far upstream as possible, and as far downstream as necessary."*
->
-> For each measure the user has described, assess:
-> - Could this be a **pre-computed column** in the dimension or fact load SP? (e.g., ABC class, age band, tenure group)
-> - Could this be answered by a **better model shape**? (e.g., a `Snapshots.*` periodic snapshot turns "events active today" from complex FILTER DAX into simple `COUNTROWS`)
-> - Could a **pre-spread fact table** eliminate complex DAX? (e.g., daily-allocated budget rows → `SUM` instead of division logic)
->
-> Flag any measures where upstream computation is the better answer. Document the recommendation in the design spec as a DW schema requirement, not a DAX requirement. Only retain complex DAX when the calculation genuinely must run in filter context at report time.
+*The last two questions are not about DAX — they determine whether classifications should be pre-computed as dimension attributes and whether budget data needs a pre-allocated fact table. Record the answers for use when drafting the specification.*
 
 ---
 
@@ -195,7 +192,12 @@ After all 8 phases are complete, generate the following structured Markdown spec
 
 ## Proposed Schema
 ### New DW Tables Required
-[List each table with schema prefix: Fact.*, Dimension.*, Staging.*, Internal.*, SSAS.* as applicable]
+[List each table with schema prefix: Fact.*, Dimension.*, Staging.*, Internal.*, Snapshots.* as applicable]
+
+*When proposing new tables, apply Roche's Maxim based on the Phase 3 and Phase 4 answers:*
+- *If Phase 3 revealed open/active things that need point-in-time counts: include a `Snapshots.*` periodic snapshot table rather than relying on DAX FILTER patterns*
+- *If Phase 4 revealed pre-defined business tiers or classifications: include those as columns in the appropriate `Dimension.*` table rather than as DAX measures*
+- *If Phase 4 revealed budget/target values that need finer granularity: include a pre-spread `Fact.*` table rather than DAX division logic*
 
 ### Existing Tables to Reuse
 [List tables already in the DW that this report will use without modification]
@@ -215,6 +217,15 @@ After all 8 phases are complete, generate the following structured Markdown spec
 
 ## DAX Measures
 [List measure names and the SQLBI pattern to apply for each]
+
+## Upstream Design Notes
+*This section is generated by the interview agent. It is not shown to the report user — it is an instruction to the architect agent on where pre-computation applies.*
+
+| Business requirement | Upstream recommendation | Schema artefact |
+|---|---|---|
+| [e.g., "Customer value tier (Gold/Silver/Bronze)"] | [e.g., "Pre-compute as dimension column in Dimension.LoadCustomer SP"] | [e.g., "`Dimension.Customer.[Customer Tier]` VARCHAR(10)"] |
+
+For each item in this table, the build modes (H, I, L) must implement the upstream artefact rather than a DAX measure. DAX measures are required only where the calculation must run in live filter context and cannot be pre-computed at a fixed row level.
 
 ## Power BI Report
 ### Suggested Pages
@@ -268,6 +279,10 @@ After sign-off, activate the `sql-dw-dimensional-review` skill and execute the r
 | 3 | **Mode L** — DAX Measures | After Mode I (DAX needs SSAS model structure) |
 | 4 | **Mode K** — SSIS Catalog Configuration | After Mode H (needs DW server and database names) |
 | 5 | **Mode M** — ADO Classic Pipeline Configuration | After all other modes (pipeline config needs all artifact names) |
+
+**Before invoking Mode H or Mode L**, pass the `## Upstream Design Notes` section from the specification to the skill with this instruction:
+
+> *"Apply Roche's Maxim: data should be transformed as far upstream as possible. For each item in the Upstream Design Notes table, implement the listed schema artefact (dimension column, snapshot table, pre-spread fact table) in Mode H and Mode J rather than generating a DAX pattern in Mode L. Only generate DAX measures for calculations that must run in live filter context and cannot be pre-computed at a fixed row level."*
 
 After all modes complete, produce a **build summary** listing every generated file and any next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT").
 
