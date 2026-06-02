@@ -95,7 +95,8 @@ Full history tracking. New row per change. Surrogate key FK in fact table.
 
 ### Date Dimension
 - Must be pre-populated for the full date range of the DW (e.g., 1990-01-01 → 2049-12-31).
-- Never use a DATETIME or DATE column as a FK — always use an integer DateKey in `YYYYMMDD` format.
+- Never use a DATETIME column as a FK. Use `DATE` typed columns — `[Date Key] DATE` — as date FKs in fact tables. This matches OLTP convention and simplifies Power BI and DAX patterns (no integer-to-date conversion needed).
+- Include a separate `[YYYYMMDD] INT NOT NULL` column for sort keys and legacy compatibility.
 - Include fiscal calendar attributes aligned to your organization's fiscal year.
 - Include `IsWeekend`, `IsHoliday`, `FiscalQuarter`, `FiscalYear`, `RelativeDayOffset` (days from today, useful for rolling windows).
 
@@ -105,8 +106,8 @@ Full history tracking. New row per change. Surrogate key FK in fact table.
 -- for legacy joins and sort keys. All fact table date FK columns must also be DATE.
 CREATE TABLE [Dimension].[Calendar] (
     [Date Key]     DATE          NOT NULL PRIMARY KEY,  -- DATE type; matches OLTP convention
-    [YYYYMMDD]     INT           NULL,                  -- 20240415 — for sort keys and legacy joins
-    [YYYYMM]       CHAR(6)       NULL,                  -- '202404'
+    [YYYYMMDD]     INT           NOT NULL,                -- 20240415 — for sort keys and legacy joins
+    [YYYYMM]       CHAR(6)       NOT NULL,                -- '202404'
     DayOfWeek      TINYINT       NOT NULL,
     DayName        VARCHAR(10)   NOT NULL,
     WeekOfYear     TINYINT       NOT NULL,

@@ -40,6 +40,7 @@ skills/
       dax-studio-workflow.md          — DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking workflow
       dw-physical-design.md           — Index strategy (CIX/NCI/CCI), staging heap pattern, statistics, partitioning, shared-instance guidance
       dw-calendar-build.md            — Dimension.Calendar DDL + population SP (2000–2050, Apr–Mar fiscal), StatHolidays table, SSAS.v_Calendar view
+      security-implementation.md      — End-to-end security: Security schema tables, RLS DAX lookup pattern, OLS, PBIRS folder permissions, Kerberos KCD chain
 ```
 
 ---

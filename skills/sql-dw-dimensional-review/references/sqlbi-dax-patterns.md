@@ -236,7 +236,7 @@ The Events in Progress pattern counts entities that are active (in progress) on 
 
 ### Data model requirements
 - Fact or snapshot table with `StartDateKey` and `EndDateKey` (both FK to `Calendar`)
-- `EndDateKey` = -1 (unknown member) if the event is still open
+- `EndDateKey` = `DATE(9999,12,31)` (sentinel) if the event is still open
 - Both relationships to `Calendar` — only one can be active; use `USERELATIONSHIP()` for the inactive one
 
 ### Pattern

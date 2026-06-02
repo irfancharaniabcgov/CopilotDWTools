@@ -241,15 +241,15 @@ INSERT INTO [Fact].[SalesOrder] (
     OrderDateKey, CustomerKey, ProductKey, SalesAmount, Quantity, LineageKey
 )
 SELECT
-    ISNULL(cal.DateKey, -1)      AS OrderDateKey,
-    ISNULL(dc.CustomerKey, -1)   AS CustomerKey,
-    ISNULL(dp.ProductKey, -1)    AS ProductKey,
+    ISNULL(cal.[Date Key], '1753-01-01')  AS OrderDateKey,
+    ISNULL(dc.CustomerKey, -1)            AS CustomerKey,
+    ISNULL(dp.ProductKey, -1)             AS ProductKey,
     s.SalesAmount,
     s.Quantity,
-    @LineageKey                  AS LineageKey
+    @LineageKey                           AS LineageKey
 FROM [Staging].[SalesOrder] s
 LEFT JOIN [Dimension].[Calendar] cal
-    ON cal.FullDate = CAST(s.OrderDate AS DATE)
+    ON cal.[Date Key] = CAST(s.OrderDate AS DATE)
 LEFT JOIN [Dimension].[Customer] dc
     ON  dc._SourceCustomerID = s._SourceCustomerID
     AND dc.IsCurrent         = 1
@@ -307,7 +307,7 @@ INSERT INTO [Fact].[SalesOrder] (
     OrderDateKey, CustomerKey, ProductKey, SalesAmount, Quantity, LineageKey
 )
 SELECT
-    ISNULL(cal.DateKey, -1),
+    ISNULL(cal.[Date Key], '1753-01-01'),
     ISNULL(dc.CustomerKey, -1),
     ISNULL(dp.ProductKey, -1),
     s.SalesAmount,
@@ -324,7 +324,7 @@ LEFT JOIN [Dimension].[Product] dp
     AND CAST(s.OrderDate AS DATE) >= dp.RowEffectiveDate
     AND CAST(s.OrderDate AS DATE) <  COALESCE(dp.RowExpirationDate, '9999-12-31')
 LEFT JOIN [Dimension].[Calendar] cal
-    ON  cal.FullDate = CAST(s.OrderDate AS DATE);
+    ON  cal.[Date Key] = CAST(s.OrderDate AS DATE);
 ```
 
 **Gotcha:** If no SCD Type 2 row covers the transaction date (data quality gap), fall back to the earliest available row for that source key:

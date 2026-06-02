@@ -890,7 +890,7 @@ BEGIN
             Quantity, UnitPrice, DiscountAmount, ExtendedAmount, LineageKey
         )
         SELECT
-            ISNULL(cal.DateKey, -1),
+            ISNULL(cal.[Date Key], '1753-01-01'),
             ISNULL(c.CustomerKey, -1),
             ISNULL(p.ProductKey, -1),
             s._SourceSalesOrderID,

@@ -129,6 +129,7 @@ CREATE TABLE [Security].[User Permissions] (
     CALCULATETABLE(
         VALUES( 'Security User Permissions'[Permitted Value] ),
         'Security User Permissions'[User Principal Name] = USERPRINCIPALNAME()
+            && 'Security User Permissions'[Dimension Name] = "Region"
     )
 ```
 
@@ -158,6 +159,8 @@ OLS hides tables or columns from a role.
 ```
 
 > OLS does not protect data in the underlying SQL tables; it protects only the SSAS model layer.
+
+> **⚠️ Multi-role bypass:** SSAS Tabular combines role permissions using union (most-permissive-wins) semantics — the same rule as row-level security. If a user belongs to any other role that has `read` permission on the same table or column (even without an explicit OLS entry), the column becomes visible. With AD-group-driven role membership this is the most common OLS failure mode. OLS is only effective when the user has no other role granting access to the object.
 
 ## 5. PBIRS Folder Permissions
 

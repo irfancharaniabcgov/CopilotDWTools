@@ -223,7 +223,7 @@ BEGIN
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL
+            NULL, NULL, NULL, NULL, NULL, NULL
         );
 
     -- ── Main date range: 2000-01-01 through 2050-12-31 ─────────────────────────
@@ -317,7 +317,7 @@ BEGIN
                  THEN 1 ELSE 0 END                                          AS [Is Leap Year],
             DAY(EOMONTH([d]))                                               AS [Days In Month],
             -- Is Pay Week: biweekly Thursday payroll, rooted at 2000-01-01
-            CASE WHEN ABS(DATEDIFF(WEEK, '2000-01-01', [d])) % 2 = 0
+            CASE WHEN DATEDIFF(DAY, '2000-01-01', [d]) / 7 % 2 = 0
                  THEN 1 ELSE 0 END                                          AS [Is Pay Week]
 
         FROM [DateSpine]
