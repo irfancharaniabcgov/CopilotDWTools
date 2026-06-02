@@ -26,7 +26,8 @@ skills/
       extended-properties-templates.md — sp_addextendedproperty T-SQL templates
       dw-review-checklist.md          — End-to-end DW/SSAS/PBIRS review checklist
       elt-patterns.md                 — SSIS ELT patterns + upstream-first examples + Internal.Lineage DDL
-      devops-deployment-patterns.md   — ADO Classic pipeline configurations + ALM Toolkit workflow
+      devops-deployment-patterns.md   — ADO Classic pipeline structure + per-component deployment (DACPAC, SSIS, SSAS, PBIRS)
+      devops-operations-patterns.md   — ELT trigger, PS standards, repo structure, PS library, ALM Toolkit, roll-forward incident response
       pbirs-constraints.md            — Power BI Report Server constraints and design rules
       pbix-report-standards.md        — PBIX report standards (Debug tab, table descriptions, measure format)
       data-classification.md          — SQL sensitivity classification and data governance templates

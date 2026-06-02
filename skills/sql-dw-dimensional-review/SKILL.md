@@ -12,7 +12,7 @@ You are in **DW / SSAS Dimensional Review mode**. Use the bundled reference file
 This stack is managed by **on-premises Azure DevOps Server** with self-hosted agents. Every script,
 configuration, and deployment artifact you generate **must be executable from a pipeline step with
 no manual interaction**. Before finalizing any output, validate it against the deployment checklist
-in `references/devops-deployment-patterns.md` Section 9.
+in `references/devops-operations-patterns.md` Section 9.
 
 ## Upstream-First Design Philosophy (Roche's Maxim)
 
@@ -61,7 +61,8 @@ Activate when the user asks to:
 | `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts; InformationType + SensitivityLabel classification |
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
 | `references/elt-patterns.md` | ELT pipeline review, SSIS 4-package structure, source SP patterns, staging/transform design |
-| `references/devops-deployment-patterns.md` | ADO Server Classic pipeline structure, DACPAC/SSIS/SSAS/PBIRS deployment scripts, PowerShell standards |
+| `references/devops-deployment-patterns.md` | ADO Server Classic pipeline structure, DACPAC/SSIS/SSAS/PBIRS deployment scripts |
+| `references/devops-operations-patterns.md` | ELT trigger, PowerShell standards, repo structure, shared PS library, ALM Toolkit, roll-forward incident response |
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
 | `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
@@ -133,14 +134,14 @@ Activate when the user asks to:
 ### Mode G: DevOps Deployment Review
 **Input**: Classic pipeline configuration, PowerShell deployment scripts, SSIS project structure, or SSAS model deployment approach
 **Process**:
-1. Run the deployment checklist from `devops-deployment-patterns.md` Section 9
+1. Run the deployment checklist from `devops-operations-patterns.md` Section 9
 2. Identify hardcoded values, missing exit codes, non-idempotent patterns
 3. Flag any step that requires GUI/manual interaction
 4. Check pipeline stage ordering: DB → SSIS → SSAS → PBIX
 5. Check SSIS deployment uses project model + SSISDB environments (not package model)
 6. Check SSAS deployment uses Tabular Editor CLI (not VS GUI)
 7. Check PBIX upload includes data source update post-upload
-8. Produce findings report with references to `devops-deployment-patterns.md` sections
+8. Produce findings report with references to `devops-deployment-patterns.md` and `devops-operations-patterns.md` sections
 
 ### Mode H: DW Schema Scaffold
 **Trigger**: Design spec confirmed (from dw-report-designer) OR user provides table requirements directly
@@ -230,7 +231,7 @@ Activate when the user asks to:
 3. Generate the build pipeline task sequence (13 steps)
 4. Note: Tabular Editor 2 (`TabularEditor.exe`) is free and already deployed to `E:\Tools\TabularEditor\` — always use the free Tabular Editor 2 executable; the paid Tabular Editor 3 is not available in this environment
 5. Output as documented pipeline configuration matching the format in `devops-deployment-patterns.md`
-**Reference**: `devops-deployment-patterns.md` for all pipeline configuration patterns and PowerShell standards
+**Reference**: `devops-deployment-patterns.md` for pipeline configuration patterns; `devops-operations-patterns.md` for PowerShell standards and shared script library
 
 ### Mode N: Full DW Scaffold (Orchestrated Build)
 
@@ -297,7 +298,7 @@ After each mode completes, run the corresponding validation before proceeding:
 - **After Mode K**: verify `ssis_catalog_configuration.json` parses; all required environment variables present (`ssis_param_LoadType`, `ssis_param_SourceDB`, `ssis_param_SourceServer`, `ssis_param_TargetDB`, `ssis_param_TargetServer`); token placeholders use `#{...}#` format
 - **After Mode I**: verify TMDL parses (`TabularEditor.exe ... --check-for-errors`); all relationships defined; `[Last Processed {TableName}]` and `[_Debug]` table present
 - **After Mode L**: run Mode D (DAX Review) — must pass with no 🔴 CRITICAL findings; every measure has `Description`, `FormatString`, and `DisplayFolder`
-- **After Mode M**: verify pipeline Classic task stubs are syntactically valid; all PowerShell follows `devops-deployment-patterns.md` Section 7 (`[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`)
+- **After Mode M**: verify pipeline Classic task stubs are syntactically valid; all PowerShell follows `devops-operations-patterns.md` Section 7 (`[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`)
 
 If a validation gate fails, Mode N:
 
@@ -350,7 +351,7 @@ At the end of a successful Mode N run, produce a delivery summary:
 - For extended properties output: produce complete, ready-to-run T-SQL using the upsert pattern
 - For bus matrix output: produce a markdown table with ✓ marks for confirmed relationships
 - For ELT output: generate parameterized T-SQL SPs and Classic pipeline PowerShell task configurations, not GUI click instructions (not YAML unless user requests it)
-- For deployment scripts: all PowerShell must follow the standards in `devops-deployment-patterns.md` Section 7 — `[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`
+- For deployment scripts: all PowerShell must follow the standards in `devops-operations-patterns.md` Section 7 — `[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `exit 0/1`
 - Ask clarifying questions before assuming the grain of a fact table — grain definition requires domain knowledge
 
 ## Interaction Style
