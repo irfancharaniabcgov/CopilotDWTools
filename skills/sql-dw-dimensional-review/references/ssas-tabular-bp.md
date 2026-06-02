@@ -106,7 +106,7 @@ Adding a measure changes only `tables/<TableName>.tmdl`; adding a role creates o
 |---|---|---|
 | Tables | PascalCase, singular | `Sales`, `Customer`, `Date` |
 | Columns | PascalCase | `SalesAmount`, `OrderDateKey` |
-| Hidden columns (keys) | PascalCase + SK suffix | `CustomerSK` (hidden) |
+| Hidden columns (keys) | PascalCase with `Key` suffix (no space) | `CustomerKey` (hidden, used for relationship only) |
 | Measures | Title Case with spaces | `[Total Sales]`, `[YTD Revenue]` |
 | Calculated columns | Avoid — use measures | (Only when aggregation is impossible) |
 | Display folders | Category\SubCategory | `Revenue\YTD`, `Inventory\Counts` |
@@ -161,13 +161,13 @@ SELECT [compatibility_level] FROM $System.DBSCHEMA_CATALOGS;
 
 ```dax
 -- ShipDateKey uses inactive relationship
-Sales by Ship Date = CALCULATE([Total Sales], USERELATIONSHIP(Sales[ShipDateKey], 'Date'[DateKey]))
+Sales by Ship Date = CALCULATE([Total Sales], USERELATIONSHIP(Sales[ShipDateKey], 'Calendar'[Date Key]))
 ```
 
 ```tmdl
 relationship
     fromTable: Sales  fromColumn: ShipDateKey
-    toTable: Date     toColumn: DateKey
+    toTable: Calendar toColumn: Date Key
     isActive: false   crossFilteringBehavior: oneDirection
 ```
 
@@ -192,7 +192,7 @@ CALCULATE([Total Sales], TREATAS(VALUES(BridgeAccountCustomer[AccountSK]), Sales
 
 **Naming:** `TableName_YYYY` / `TableName_YYYYQQ` / `TableName_YYYYMM` / `TableName_Current`
 
-**Benefits:** incremental refresh, parallel processing, hot/cold separation.
+**Benefits:** incremental partition processing (ProcessData on changed partitions only), parallel processing, hot/cold separation.
 
 ### TMDL Partition Snippet
 
@@ -200,7 +200,7 @@ CALCULATE([Total Sales], TREATAS(VALUES(BridgeAccountCustomer[AccountSK]), Sales
 partition Sales_202401 = sql
     source =
         SELECT * FROM [SSAS].[SalesOrder]
-        WHERE OrderDateKey >= 20240101 AND OrderDateKey < 20240201
+    WHERE [Order Date Key] >= '2024-01-01' AND [Order Date Key] < '2024-02-01'
 ```
 
 **Processing sequence:** Always process dimensions before facts. Historical partitions: `ProcessData` only if source changed; current partition: `ProcessFull`.
@@ -246,17 +246,18 @@ Calculation groups (CL 1500+) eliminate duplicate time-intelligence measure prol
 ```tmdl
 calculationGroup Time Intelligence
     precedence: 10
-    calculationItem YTD = CALCULATE(SELECTEDMEASURE(), DATESYTD('Date'[FullDate]))
-    calculationItem QTD = CALCULATE(SELECTEDMEASURE(), DATESQTD('Date'[FullDate]))
-    calculationItem MTD = CALCULATE(SELECTEDMEASURE(), DATESMTD('Date'[FullDate]))
-    calculationItem Prior Year = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Date'[FullDate]))
+    calculationItem YTD = CALCULATE(SELECTEDMEASURE(), DATESYTD('Calendar'[Date Key]))
+    calculationItem YTD Fiscal = CALCULATE(SELECTEDMEASURE(), DATESYTD('Calendar'[Date Key], "03-31"))
+    calculationItem QTD = CALCULATE(SELECTEDMEASURE(), DATESQTD('Calendar'[Date Key]))
+    calculationItem MTD = CALCULATE(SELECTEDMEASURE(), DATESMTD('Calendar'[Date Key]))
+    calculationItem Prior Year = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Calendar'[Date Key]))
     calculationItem YOY Change =
         VAR Cur = SELECTEDMEASURE()
-        VAR PY  = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Date'[FullDate]))
+        VAR PY  = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Calendar'[Date Key]))
         RETURN Cur - PY
     calculationItem YOY % Change =
         VAR Cur = SELECTEDMEASURE()
-        VAR PY  = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Date'[FullDate]))
+        VAR PY  = CALCULATE(SELECTEDMEASURE(), SAMEPERIODLASTYEAR('Calendar'[Date Key]))
         RETURN DIVIDE(Cur - PY, ABS(PY))
 ```
 
@@ -498,7 +499,7 @@ ORDER BY [USED_SIZE] DESC;
 - [ ] Remove columns unused in measures, relationships, or visible field list
 - [ ] Hide all SK columns
 - [ ] Replace high-cardinality strings with integer codes (keep label in DW)
-- [ ] Use `INT` DateKey, not `DATETIME`
+- [ ] Use `DATE` type for `[Date Key]` column — never `INT YYYYMMDD` or `DATETIME`
 - [ ] Check for duplicate columns
 
 ---
@@ -583,10 +584,10 @@ Add to repository's `BPARules.json` (merge with standard file).
     "ID": "DW_SK_COLUMNS_HIDDEN",
     "Name": "Surrogate key columns should be hidden",
     "Category": "DW Standards",
-    "Description": "All columns ending in 'SK' are DW surrogate keys and should be hidden from end users. Users should filter via relationships to the dimension table.",
+    "Description": "Columns whose name ends with 'Key' but contains no spaces are DW surrogate keys (e.g. CustomerKey, OrderDateKey) and should be hidden from end users. Users should filter via relationships to the dimension table. Excludes visible dimension columns with spaces like [Date Key].",
     "Severity": 3,
     "Scope": "DataColumn, CalculatedColumn, CalculatedTableColumn",
-    "Expression": "Name.EndsWith(\"SK\") && IsVisible",
+    "Expression": "Name.EndsWith(\"Key\") && !Name.Contains(\" \") && IsVisible",
     "FixExpression": "IsHidden = true"
   },
   {
@@ -927,7 +928,7 @@ WHERE [PROPERTY_NAME] IN ('ProductVersion','DefaultCompatibilityLevel','MemoryLi
 
 | # | Finding | Severity | Correction |
 |---|---|---|---|
-| 1 | Surrogate key (SK) columns visible to users | Medium | Set `IsHidden = true` on all SK columns |
+| 1 | Surrogate key (`{Entity}Key`) columns visible to users | Medium | Set `IsHidden = true` on all `{Entity}Key` columns (no-space names ending in `Key`); use the `DW_SK_COLUMNS_HIDDEN` BPA rule |
 | 2 | Measures without format strings | High | Add `FormatString` to every measure; use `"#,##0.00"` for currency |
 | 3 | Calculated columns on large fact tables | High | Replace with DAX measures; calculated columns bloat VertiPaq |
 | 4 | Bidirectional relationships on all tables | High | Only enable bidirectional where explicitly required; document reason |
@@ -945,7 +946,7 @@ WHERE [PROPERTY_NAME] IN ('ProductVersion','DefaultCompatibilityLevel','MemoryLi
 | 16 | No BPA rules enforced in CI/CD | Medium | Add Tabular Editor BPA step to deployment pipeline |
 | 17 | AMO/TOM version mismatch in processing scripts | Medium | Pin NuGet package to same major version as SSAS instance |
 | 18 | Model has no perspectives | Low | Add at least one perspective per subject area |
-| 19 | NULL FK values in source DW tables | High | Use `-1` Unknown surrogate key; NULL breaks SSAS relationship integrity |
+| 19 | `NULL` FK values in source DW tables | High | Use `'1753-01-01'` (DATE type) as the unknown-date sentinel; `NULL` breaks SSAS relationship integrity. Fact rows with `NULL` dates should resolve to the `1753-01-01` sentinel row in `Dimension.Calendar`, which appears as a VertiPaq blank row in slicers — document this as expected behaviour |
 | 20 | SSAS service account not in local Administrators | Low | SSAS service account needs `Log on as a service` and access to backup paths |
 
 

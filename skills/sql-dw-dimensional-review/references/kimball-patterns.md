@@ -1,5 +1,7 @@
 # Kimball Dimensional Modeling Reference
 
+> **Authority Note:** For anything inside the SSAS Tabular semantic layer and DAX, **SQLBI (Marco Russo & Alberto Ferrari)** is the primary authority — use `sqlbi-dax-patterns.md` and `ssas-tabular-bp.md` for model and DAX design. Kimball methodology governs the **physical Data Warehouse design** (fact/dimension schema, SCD types, bus matrix, grain declaration). When Kimball guidance conflicts with SQLBI/Power BI best practices, SQLBI takes precedence for the semantic layer.
+
 Based on Ralph Kimball's *The Data Warehouse Toolkit* (3rd ed.) and the Kimball Group methodology.
 Supplemented with SQL Server 2016–2022 on-premises physical design guidance.
 
@@ -74,7 +76,7 @@ Use the organisation's actual DW naming conventions when generating SQL or SSDT 
 ### Periodic Snapshot Fact Table
 - One row per entity per standard time period (daily balance, monthly inventory).
 - Grain: entity + calendar period.
-- Includes semi-additive measures (balances) — do **not** SUM across time in SQL; handle in DAX with `LASTDATE` / `CALCULATE`.
+- Includes semi-additive measures (balances) — do **not** SUM across time in SQL; handle in DAX with `LASTNONBLANK` / `CALCULATE` (SQLBI pattern — `LASTDATE` is deprecated for this use case).
 
 ### Accumulating Snapshot Fact Table
 - One row per long-lived process instance (order lifecycle, claim lifecycle).
@@ -533,26 +535,25 @@ CREATE TABLE [Internal].[Lineage] (
 
 ### Standard NULL Substitution Values
 
+> **SQLBI simplification:** Use a single **Unknown** sentinel (`-1`) for all unknown/missing FK scenarios. Multiple sentinel values (-2 Not Applicable, -3 Pending, etc.) add model complexity without benefit in DAX — a single unknown member appears as `(Blank)` in slicers regardless of its label, and SSAS filter contexts do not distinguish between multiple sentinel rows.
+
 | Scenario | Surrogate Key | Descriptive Attributes |
 |---|---|---|
-| FK lookup fails (member not found) | `-1` (Unknown) | `'Unknown'` |
-| Attribute not applicable for this row type | `-2` (Not Applicable) | `'N/A'` |
-| Attribute not yet known / pending | `-3` (Pending) | `'Pending'` |
-| Truly optional relationship (nullable FK is by design) | `-4` (None) | `'None'` |
+| FK lookup fails, member not found, or N/A | `-1` (Unknown) | `'Unknown'` |
+
+If business reporting genuinely requires distinguishing "Not Applicable" from "Unknown", use a **Status attribute** on the fact or the dimension row, not multiple sentinel surrogate keys.
 
 ### Dimension Unknown Member Setup
 
 ```sql
--- Every dimension must have these reserved rows
+-- Every dimension must have the Unknown sentinel row
 -- Insert with IDENTITY_INSERT ON (see Surrogate Key section)
 SET IDENTITY_INSERT [Dimension].[Customer] ON;
 INSERT INTO [Dimension].[Customer] (
     CustomerKey, _SourceCustomerID, CustomerName, City, StateCode,
     RowEffectiveDate, RowExpirationDate, IsCurrent, LineageKey
 ) VALUES
-    (-1, -1, 'Unknown',        'Unknown',  'XX', '1753-01-01', '9999-12-31', 1, NULL),
-    (-2, -2, 'Not Applicable', 'N/A',      'XX', '1753-01-01', '9999-12-31', 1, NULL),
-    (-3, -3, 'Pending',        'Pending',  'XX', '1753-01-01', '9999-12-31', 1, NULL);
+    (-1, -1, 'Unknown', 'Unknown', 'XX', '1753-01-01', '9999-12-31', 1, NULL);
 SET IDENTITY_INSERT [Dimension].[Customer] OFF;
 ```
 

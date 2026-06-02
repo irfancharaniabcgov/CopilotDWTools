@@ -156,7 +156,7 @@ IF(
 
 - All time intelligence must reference the `'Calendar'` SSAS table.
 - The `'Calendar'` table must be marked as a Date Table in the SSAS model.
-- The date column used for time intelligence is `'Calendar'[Date]` and must use a Date data type.
+- The date column used for time intelligence is `'Calendar'[Date Key]` and must use a Date data type.
 - Confirm the organisational calendar grain and fiscal calendar requirements before creating fiscal calculations.
 
 ### Standard time intelligence patterns
@@ -165,7 +165,17 @@ IF(
 YTD Sales Amount =
 CALCULATE(
     [Total Sales Amount],
-    DATESYTD( 'Calendar'[Date] )
+    DATESYTD( 'Calendar'[Date Key] )
+)
+```
+
+```dax
+-- Fiscal year YTD (Apr 1 – Mar 31, org standard)
+-- FY2024 = Apr 1 2024 – Mar 31 2025; use fiscal year-end month/day "03-31"
+FYTD Sales Amount =
+CALCULATE(
+    [Total Sales Amount],
+    DATESYTD( 'Calendar'[Date Key], "03-31" )
 )
 ```
 
@@ -173,7 +183,7 @@ CALCULATE(
 Prior Year Sales Amount =
 CALCULATE(
     [Total Sales Amount],
-    SAMEPERIODLASTYEAR( 'Calendar'[Date] )
+    SAMEPERIODLASTYEAR( 'Calendar'[Date Key] )
 )
 ```
 
@@ -193,7 +203,7 @@ DIVIDE(
 | Anti-pattern | Why forbidden | Correct alternative |
 |---|---|---|
 | Division operator with a denominator measure | Divide-by-zero or misleading error behavior | Use `DIVIDE()` |
-| `FILTER(ALL(Table), condition)` | Scans the entire table and can severely reduce performance | Use `KEEPFILTERS()` or `CALCULATETABLE()` |
+| `FILTER(ALL(Table), condition)` | As a default filter modifier, scans the entire table and can severely reduce performance | Use `KEEPFILTERS()` or `CALCULATETABLE()` for user-selection filters. **Exception:** `FILTER(ALL(...))` is the correct SQLBI pattern for Events in Progress and cumulative total/running totals that must ignore the current filter context — document the reason in the measure `Description` |
 | `EARLIER()` in measures | It is not appropriate for measure evaluation patterns | Use `VAR` to capture context |
 | Implicit auto-measures | Required description, folder, and format metadata cannot be controlled | Always create explicit measures |
 | `COUNTROWS(FILTER(...))` | Can force unnecessary table scans | Use `CALCULATE(COUNTROWS(...), condition)` |
@@ -238,7 +248,7 @@ When reviewing a DAX measure, check all of the following:
 | Has `DisplayFolder` | 🟡 MEDIUM |
 | Uses `VAR` and `RETURN` for multi-step logic | 🟡 MEDIUM |
 | References `'Calendar'` for time intelligence | 🔴 CRITICAL |
-| Avoids `FILTER(ALL())` | 🟠 HIGH |
+| Avoids `FILTER(ALL())` as a default filter modifier (exception: Events in Progress, cumulative totals) | 🟠 HIGH |
 | Avoids `EARLIER()` in measures | 🟠 HIGH |
 | Avoids implicit auto-measures | 🟡 MEDIUM |
 

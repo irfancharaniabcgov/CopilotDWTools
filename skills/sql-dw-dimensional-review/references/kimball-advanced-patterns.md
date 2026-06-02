@@ -1,5 +1,7 @@
 # Kimball Advanced Implementation Patterns
 
+> **Authority Note:** For SSAS Tabular semantic layer and DAX, **SQLBI (Marco Russo & Alberto Ferrari)** is the primary authority — use `sqlbi-dax-patterns.md`, `sqlbi-dax-patterns-advanced.md`, and `ssas-tabular-bp.md`. This file covers **physical SQL Server DW implementation details** that supplement the foundational Kimball modeling patterns in `kimball-patterns.md`. When Kimball guidance conflicts with SQLBI/Power BI best practices, SQLBI takes precedence for the semantic layer.
+
 SQL Server–specific implementation patterns for dimensional data warehouses.
 Supplements `kimball-patterns.md` (foundational modeling theory).
 For org naming conventions, see `kimball-patterns.md`.

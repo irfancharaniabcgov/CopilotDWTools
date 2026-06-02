@@ -371,13 +371,9 @@ The build/release agent must have these tools and modules installed:
 
 ### Optional: YAML Pipeline Equivalent
 
-
-
-> Use YAML only if your team has moved to YAML-based pipelines or is using Azure DevOps Services.
-
-> For this environment, the Classic pipeline UI remains the source of truth. If a YAML version is
-
-> created, it should mirror the same task order, task types, and `Tools` variable references shown above.
+> **On-Premises only:** This organisation uses **Azure DevOps Server** (on-premises), not Azure DevOps Services (cloud). YAML pipelines are supported in Azure DevOps Server 2019+, but all existing pipelines use the Classic pipeline UI.
+>
+> If a YAML equivalent is created, it must mirror the same task order, task types, and `$(tool_*)` variable references shown in the Classic pipeline above. YAML cloud-only features (e.g., environments with approval gates from Azure DevOps Services, service connections to Azure, Microsoft-hosted agents) are **âŒ not available** in this environment.
 
 
 
@@ -1020,4 +1016,4 @@ Parameters:
 
 ---
 
-> **See also:** [devops-operations-patterns.md](devops-operations-patterns.md) — ELT pipeline trigger, PowerShell script standards, repository structure, shared script library, Tabular Editor tools package, ALM Toolkit workflow, and incident response (roll-forward philosophy).
+> **See also:** [devops-operations-patterns.md](devops-operations-patterns.md) ï¿½ ELT pipeline trigger, PowerShell script standards, repository structure, shared script library, Tabular Editor tools package, ALM Toolkit workflow, and incident response (roll-forward philosophy).

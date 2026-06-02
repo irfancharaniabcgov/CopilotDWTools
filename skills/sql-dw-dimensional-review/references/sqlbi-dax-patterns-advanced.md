@@ -21,7 +21,9 @@ CALCULATE(
 ```
 
 ### Native M2M (CL 1500+)
-Set relationship cross-filter to **Both** directly. Avoid on large tables (explosive filter expansion). Prefer `TREATAS` for control.
+Setting relationship cross-filter to **Both** directly is **not recommended** — it causes explosive filter expansion on large tables and makes row context ambiguous. Use the `TREATAS` bridge pattern above for all M2M scenarios.
+
+> **SQLBI standard:** Always use bridge table + `TREATAS` for many-to-many. Native bidirectional M2M is a last resort for small reference tables only.
 
 ---
 
@@ -34,18 +36,21 @@ Set relationship cross-filter to **Both** directly. Avoid on large tables (explo
 SELECTEDMEASURE()
 
 -- Calculation Item: "YTD"
-CALCULATE( SELECTEDMEASURE(), DATESYTD( Calendar[Date] ) )
+CALCULATE( SELECTEDMEASURE(), DATESYTD( 'Calendar'[Date Key] ) )
+
+-- Calculation Item: "YTD Fiscal"  (Apr 1 – Mar 31; fiscal year-end = Mar 31)
+CALCULATE( SELECTEDMEASURE(), DATESYTD( 'Calendar'[Date Key], "03-31" ) )
 
 -- Calculation Item: "SPLY"
-CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) )
+CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) )
 
 -- Calculation Item: "YoY %"
 VAR Curr = CALCULATE( SELECTEDMEASURE() )
-VAR Prev = CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) )
+VAR Prev = CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) )
 RETURN DIVIDE( Curr - Prev, Prev )
 
 -- Calculation Item: "R12M"
-CALCULATE( SELECTEDMEASURE(), DATESINPERIOD( Calendar[Date], LASTDATE( Calendar[Date] ), -12, MONTH ) )
+CALCULATE( SELECTEDMEASURE(), DATESINPERIOD( 'Calendar'[Date Key], LASTDATE( 'Calendar'[Date Key] ), -12, MONTH ) )
 
 -- Format String Expression on YoY % item:
 "0.0%"
@@ -53,7 +58,7 @@ CALCULATE( SELECTEDMEASURE(), DATESINPERIOD( Calendar[Date], LASTDATE( Calendar[
 -- Conditional: apply only to named measures (use SELECTEDMEASURENAME())
 IF(
     SELECTEDMEASURENAME() IN { "Total Sales", "Total Cost", "Gross Profit" },
-    CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( Calendar[Date] ) ),
+    CALCULATE( SELECTEDMEASURE(), SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) ),
     SELECTEDMEASURE()
 )
 ```
@@ -155,14 +160,14 @@ Total Sales (Clean) := IF( COUNTROWS( 'Fact Sales' ) = 0, BLANK(), SUM( 'Fact Sa
 
 ## 13. Aggregation Tables (User-Defined, CL 1500+)
 
-> On-prem SSAS has **no automatic aggregations** — configure manually via `TabularEditor.exe`.
+> **TE3 / Premium / Fabric feature note:** Automatic aggregations require Tabular Editor 3 (paid) and/or Power BI Premium/Fabric. On-prem SSAS has **no automatic aggregations** — the pattern below uses manually configured user-defined aggregations via `TabularEditor.exe` (TE2).
 
 **Use when:** fact table >50–100M rows with repeating summary queries at coarser grain (month/region/category).
 
 ```sql
 -- Step 1: Create agg table in DW (refreshed nightly)
 CREATE TABLE [Fact].[Sales_Agg_MonthRegion] (
-    DateMonthKey  INT          NOT NULL,
+    DateMonthKey  DATE         NOT NULL,   -- first day of month: DATEFROMPARTS(YEAR, MONTH, 1)
     RegionKey     INT          NOT NULL,
     ProductCatKey INT          NOT NULL,
     TotalSales    DECIMAL(18,2) NOT NULL,
@@ -172,12 +177,13 @@ CREATE TABLE [Fact].[Sales_Agg_MonthRegion] (
 );
 
 INSERT INTO [Fact].[Sales_Agg_MonthRegion]
-SELECT d.MonthKey, f.RegionKey, p.CategoryKey,
+SELECT DATEFROMPARTS(YEAR(d.[Date Key]), MONTH(d.[Date Key]), 1),
+       f.RegionKey, p.CategoryKey,
     SUM(f.SalesAmount), SUM(f.CostAmount), SUM(f.Units)
 FROM [Fact].[Sales] f
-JOIN [Dimension].[Calendar] d ON f.DateKey    = d.DateKey
+JOIN [Dimension].[Calendar] d ON f.[Order Date Key] = d.[Date Key]
 JOIN [Dimension].[Product] p ON f.ProductKey = p.ProductKey
-GROUP BY d.MonthKey, f.RegionKey, p.CategoryKey;
+GROUP BY DATEFROMPARTS(YEAR(d.[Date Key]), MONTH(d.[Date Key]), 1), f.RegionKey, p.CategoryKey;
 ```
 
 ```json
@@ -206,8 +212,8 @@ CALCULATETABLE(
         "Total Sales", [Total Sales], "Total Cost", [Total Cost],
         "Gross Profit", [Gross Profit], "Units Sold", [Units Sold]
     ),
-    Calendar[Date] >= DATE(@StartYear, @StartMonth, 1),
-    Calendar[Date] <= EOMONTH( DATE( @EndYear, @EndMonth, 1 ), 0 )  -- EOMONTH handles months shorter than 31 days
+    Calendar[Date Key] >= DATE(@StartYear, @StartMonth, 1),
+    Calendar[Date Key] <= EOMONTH( DATE( @EndYear, @EndMonth, 1 ), 0 )  -- EOMONTH handles months shorter than 31 days
 )
 ORDER BY 'Calendar'[Calendar Year], 'Calendar'[Month Name], 'Product'[Product Name]
 

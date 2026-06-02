@@ -177,15 +177,16 @@ Each SSAS table carries a hidden calculated column `[Last Processed]` with expre
 }
 ```
 
-**TE3 C# script — add to all non-hidden tables missing it:**
+**TE2 C# script — add to all non-hidden tables missing it:**
 ```csharp
+// AddLastProcessedColumn.cs (Tabular Editor 2 — TE2 compatible)
 foreach (var table in Model.Tables.Where(t => !t.IsHidden))
 {
     if (table.Columns.All(c => c.Name != "Last Processed"))
     {
         var col = table.AddCalculatedColumn("Last Processed");
         col.Expression    = "NOW()";
-        col.DataType      = TabularEditor.TOMWrapper.DataType.DateTime;
+        col.DataType      = DataType.DateTime;
         col.IsHidden      = true;
         col.FormatString  = "yyyy-MMM-dd h:mm AM/PM";
         col.Description   = "Shows when this SSAS table was last processed";

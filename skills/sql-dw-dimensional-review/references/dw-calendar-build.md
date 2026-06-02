@@ -178,6 +178,9 @@ END
 > | Open/future | `'9999-12-31'` | FK target for events with no end date (SCD Type 2, open subscriptions, etc.) |
 >
 > These rows are inserted by `Dimension.PopulateCalendar` before the main date range.
+> **They live in `Dimension.Calendar` only (SQL FK constraint integrity). `SSAS.v_Calendar` filters them
+> out so SSAS sees a contiguous date range — required for `Mark as Date Table` and DAX time intelligence.
+> See Section 4 (view definition) and Section 5 (SSAS configuration) for details.**
 
 ---
 
@@ -521,12 +524,46 @@ GO
 
 After importing `SSAS.v_Calendar`, mark it as a Date table:
 
+**Option A — SSDT / Visual Studio:**
+1. Open the SSAS project, select the `Calendar` table in the model diagram
+2. Table menu → *Mark as Date Table* → *Mark as Date Table…*
+3. Set *Date Column* to `[Date Key]` (type must show `Date` — ✓)
+4. Click *OK*. SSAS validates the column is unique and has no NULLs.
+
+**Option B — Tabular Editor 2:**
+1. Select the `Calendar` table in the object tree
+2. Properties pane → `DataCategory` → set to `Time`
+3. Right-click `[Date Key]` column → *Mark as Date Key*
+   (or set `IsKey = true` and `DataCategory = "Time"` in Properties)
+
+**TMDL (git-tracked JSON):**
+```json
+"dateColumn": "Date Key"
+```
+This line in the Calendar table TMDL JSON controls `Mark as Date Table`.
+
 ```
 Mark as Date Table → Date Column: [Date Key]   (DATA TYPE must be Date — ✓)
 ```
 
 `[Date Key]` is `DATE` type — SQL Server Analysis Services accepts `DATE` columns
 directly as the date table key. No conversion needed.
+
+> **Contiguity validation:** Before deploying, run this DMV query against the SSAS instance to verify no gaps:
+> ```sql
+> SELECT COUNT(*) AS CalendarRows,
+>        MIN([Date Key]) AS MinDate,
+>        MAX([Date Key]) AS MaxDate,
+>        DATEDIFF(DAY, MIN([Date Key]), MAX([Date Key])) + 1 AS ExpectedRows
+> FROM $System.DISCOVER_STORAGE_TABLE_COLUMNS  -- use SSAS DMV or query model view
+> ```
+> Simpler approach — query the view directly:
+> ```sql
+> SELECT COUNT(*) AS ActualRows,
+>        DATEDIFF(DAY, MIN([Date Key]), MAX([Date Key])) + 1 AS ExpectedRows
+> FROM [SSAS].[v_Calendar];
+> -- ActualRows must = ExpectedRows (no gaps, no sentinels, no duplicates)
+> ```
 
 ### Sort-by columns
 
@@ -549,6 +586,16 @@ directly as the date table key. No conversion needed.
 `[Day Of Week In Month]`, `[Day Of Week In Year]`, `[Week Of Month]`,
 `[Fiscal Period]`, `[Fiscal Quarter]`, `[Fiscal Year]`,
 `[YYYYMMDD]`, `[YYYYMM]`, `[Relative Day]`, `[Relative Week]`, `[Relative Month]`
+
+> **`[YYYYMMDD]` is always populated (NOT NULL).** It is computed in the `LoadCalendar` procedure as `YEAR * 10000 + MONTH * 100 + DAY` for every calendar date — there is no scenario in which a valid calendar row would produce a NULL. It is hidden in SSAS because it has no user-facing meaning; its only purpose is as a compact integer representation for external integrations (e.g., flat file exports, legacy system keys).
+
+> **Blank row behavior:** When `Mark as Date Table` is enabled on `Calendar`, SSAS suppresses the automatic blank row for the `Calendar` table. Fact rows that joined to the `1753-01-01` sentinel via the SQL FK will show `[Date Key] = 1753-01-01` in SSAS rather than a blank row. DAX measures should handle this explicitly if needed:
+> ```dax
+> -- Exclude unknown/sentinel dates from time intelligence totals
+> Sales Excl Unknown :=
+> CALCULATE( [Total Sales],
+>     'Calendar'[Date Key] <> DATE(1753,1,1) )
+> ```
 
 ### Display folders
 

@@ -1,4 +1,4 @@
-# PBIRS Constraints & Best Practices
+﻿# PBIRS Constraints & Best Practices
 
 > **Target Stack:** Power BI Report Server (on-prem), SSAS Tabular (on-prem, CL 1200�1600), SQL Server 2016�2022, Active Directory / Windows Authentication, Kerberos. No Power BI Service. No Azure. No Microsoft Fabric.
 
@@ -11,28 +11,27 @@ Update cadence: typically 1 major quarterly release behind latest.
 
 | Feature | Cloud (PBI Service) | PBIRS (On-Prem) | Notes |
 |---|---|---|---|
-| Live connection to SSAS Tabular | ? (via gateway) | ? (direct) | PBIRS preferred on-prem � no gateway overhead |
-| Import mode (.pbix) | ? | ? | Limited by PBIRS server RAM |
-| DirectQuery to SQL Server | ? | ? | |
-| Composite models | ? | ? | Not supported in PBIRS |
-| Report-level DAX measures | ? | ? | Must exist in SSAS model |
-| Calculated tables/columns (report) | ? | ? | Add to SSAS model |
-| Power Query transforms in live connection | ? | ? | Neither supports this |
-| Q&A / AI Insights / Dataflows | ? | ? | Generally not supported on-prem |
-| RLS (model-defined) | ? | ? | Delegated via Kerberos |
-| Report RLS (.pbix roles) | ? | ? | Not supported in live connection |
-| Scheduled refresh | ? | ? (import only) | Live connection: no refresh needed |
-| Subscriptions (email delivery) | ? | ? | PBIRS SSRS engine |
-| Paginated reports (SSRS) | ? (Premium only) | ? (native) | Core PBIRS strength |
-| Incremental refresh | ? (Premium) | ? | |
-| Deployment pipelines | ? | ? | Manual deployment on-prem |
-| Usage metrics | ? | ? | |
-| Custom visuals (AppSource) | ? | ?? Certified only | Test each with PBIRS version |
-| Azure AD / MFA | ? | ? | Windows/AD auth only |
-| Themes (.json) | ? | ? | |
-| Embed in SharePoint | ? | ? (iframe/web part) | |
-| Mobile-optimised layouts | ? | ? | |
-
+| Live connection to SSAS Tabular | ✅ (via gateway) | ✅ (direct) | PBIRS preferred on-prem — no gateway overhead |
+| Import mode (.pbix) | ✅ | ✅ | Limited by PBIRS server RAM |
+| DirectQuery to SQL Server | ✅ | ✅ | |
+| Composite models | ✅ | ❌ | Not supported in PBIRS |
+| Report-level DAX measures | ✅ | ❌ | Must exist in SSAS model |
+| Calculated tables/columns (report) | ✅ | ❌ | Add to SSAS model |
+| Power Query transforms in live connection | ❌ | ❌ | Neither supports this |
+| Q&A / AI Insights / Dataflows | ✅ | ❌ | Not supported on-prem |
+| RLS (model-defined) | ✅ | ✅ | Delegated via Kerberos |
+| Report RLS (.pbix roles) | ✅ | ❌ | Not supported in live connection |
+| Scheduled refresh | ✅ | ✅ (import only) | Live connection: no refresh needed |
+| Subscriptions (email delivery) | ✅ | ✅ | PBIRS SSRS engine |
+| Paginated reports (SSRS) | ✅ (Premium only) | ✅ (native) | Core PBIRS strength |
+| Incremental refresh | ✅ (Premium) | ❌ | |
+| Deployment pipelines | ✅ | ❌ | Manual deployment on-prem |
+| Usage metrics | ✅ | ❌ | Not available in PBIRS |
+| Custom visuals (AppSource) | ✅ | ⚠️ Certified only | Test each with PBIRS version |
+| Azure AD / MFA | ✅ | ❌ | Windows/AD auth only |
+| Themes (.json) | ✅ | ✅ | |
+| Embed in SharePoint | ✅ | ✅ (iframe/web part) | |
+| Mobile-optimised layouts | ✅ | ✅ | |
 ---
 
 ## 2. Version Compatibility Matrix

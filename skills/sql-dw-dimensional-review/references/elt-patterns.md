@@ -82,9 +82,9 @@ Instead of DAX dividing monthly budget by days-in-month, pre-spread during the f
 ```sql
 -- Fact.LoadBudgetAllocated — runs after source budget is loaded to staging
 -- Spreads over working days only; join filters to IsWorkingDay = 1 so divisor and row count match
-INSERT INTO Fact.BudgetAllocated (DateKey, DepartmentKey, CostCentreKey, BudgetAmount)
+INSERT INTO Fact.BudgetAllocated ([Date Key], DepartmentKey, CostCentreKey, BudgetAmount)
 SELECT
-    c.DateKey,
+    c.[Date Key],
     b.DepartmentKey,
     b.CostCentreKey,
     b.MonthlyBudget / NULLIF(c.WorkingDaysInMonth, 0) AS BudgetAmount
@@ -246,7 +246,7 @@ JOIN Staging.AdviceAndAssistance s
 INSERT INTO Fact.AdviceAndAssistance (...)
 SELECT d.DimKey, ISNULL(r.RegionKey, 0), ...
 FROM Staging.AdviceAndAssistance s
-JOIN Dimension.Calendar c ON s.ServiceStartDate = c.DateKey
+LEFT JOIN Dimension.Calendar c ON s.ServiceStartDate = c.[Date Key]   -- LEFT JOIN: missing dates resolve to sentinel '1753-01-01'
 LEFT JOIN Dimension.Region r ON s.RegionCode = r._SourceRegionCode;
 ```
 
@@ -408,14 +408,14 @@ BEGIN
         )
         SELECT
             c.SalesOrderID,
-            cal.DateKey AS OrderDateKey,
+            ISNULL(cal.[Date Key], '1753-01-01') AS OrderDateKey,   -- sentinel '1753-01-01' for missing/unknown dates
             cust.CustomerKey,
             c.Quantity,
             c.UnitPrice,
             c.Quantity * c.UnitPrice AS SalesAmount,
             @LineageKey
         FROM NetChanges c
-        JOIN [Dimension].[Calendar] cal ON CAST(c.OrderDate AS DATE) = cal.FullDate
+        LEFT JOIN [Dimension].[Calendar] cal ON CAST(c.OrderDate AS DATE) = cal.[Date Key]   -- LEFT JOIN so unknown dates become sentinel
         JOIN [Dimension].[Customer] cust ON c.CustomerID = cust._SourceCustomerID AND cust.IsCurrent = 1
         WHERE c.__$operation IN (2, 5);
 

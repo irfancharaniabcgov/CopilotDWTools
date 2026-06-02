@@ -8,19 +8,28 @@ Patterns used in most or all projects. The agent references this file for every 
 
 ## 1. Time Intelligence Patterns
 
-**Prerequisites:** `Calendar` marked as Date Table; single active relationship to fact date key; contiguous date range (no gaps).
+### Model Prerequisites
+For all time intelligence patterns to work correctly, the following must be true in the SSAS Tabular model:
+
+| Requirement | Detail |
+|---|---|
+| Date table marked | `Calendar` table → Properties → *Mark as Date Table* → `[Date Key]` column |
+| Contiguous date range | No gaps between `MIN([Date Key])` and `MAX([Date Key])` — sentinels `1753-01-01` / `9999-12-31` must be filtered out by the SSAS view (`SSAS.v_Calendar`) |
+| Single active relationship | Each fact date FK has exactly **one** active relationship to `'Calendar'[Date Key]`; additional date FKs use inactive relationships + `USERELATIONSHIP()` |
+| DATE data type | `[Date Key]` is `DATE` in SQL and `DateTime` in SSAS — not INT, not VARCHAR |
+| Fiscal year end | Org fiscal year ends **Mar 31** (Apr 1 → Mar 31); use `"03-31"` in `DATESYTD()` |
 
 ```dax
-Sales YTD        := CALCULATE( [Total Sales], DATESYTD( Calendar[Date] ) )
-Sales MTD        := CALCULATE( [Total Sales], DATESMTD( Calendar[Date] ) )
-Sales QTD        := CALCULATE( [Total Sales], DATESQTD( Calendar[Date] ) )
-Sales SPLY       := CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
-Sales Prior Month := CALCULATE( [Total Sales], DATEADD( Calendar[Date], -1, MONTH ) )
-Sales FYTD       := CALCULATE( [Total Sales], DATESYTD( Calendar[Date], "6/30" ) ) -- fiscal end June
+Sales YTD        := CALCULATE( [Total Sales], DATESYTD( 'Calendar'[Date Key] ) )
+Sales MTD        := CALCULATE( [Total Sales], DATESMTD( 'Calendar'[Date Key] ) )
+Sales QTD        := CALCULATE( [Total Sales], DATESQTD( 'Calendar'[Date Key] ) )
+Sales SPLY       := CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) )
+Sales Prior Month := CALCULATE( [Total Sales], DATEADD( 'Calendar'[Date Key], -1, MONTH ) )
+Sales FYTD       := CALCULATE( [Total Sales], DATESYTD( 'Calendar'[Date Key], "03-31" ) ) -- fiscal year-end Mar 31 (Apr–Mar)
 
 -- Rolling 12 months
 Sales R12M :=
-CALCULATE( [Total Sales], DATESINPERIOD( Calendar[Date], LASTDATE( Calendar[Date] ), -12, MONTH ) )
+CALCULATE( [Total Sales], DATESINPERIOD( 'Calendar'[Date Key], LASTDATE( 'Calendar'[Date Key] ), -12, MONTH ) )
 
 -- YoY % Growth
 Sales YoY % :=
@@ -41,14 +50,14 @@ Use `LASTNONBLANK`/`FIRSTNONBLANK` for balances that must not be summed across t
 ```dax
 Closing Balance :=
 CALCULATE( SUM( Balance[Balance] ),
-    LASTNONBLANK( Calendar[Date], CALCULATE( SUM( Balance[Balance] ) ) ) )
+    LASTNONBLANK( 'Calendar'[Date Key], CALCULATE( SUM( Balance[Balance] ) ) ) )
 
 Opening Balance :=
 CALCULATE( SUM( Balance[Balance] ),
-    FIRSTNONBLANK( Calendar[Date], CALCULATE( SUM( Balance[Balance] ) ) ) )
+    FIRSTNONBLANK( 'Calendar'[Date Key], CALCULATE( SUM( Balance[Balance] ) ) ) )
 
 Avg Daily Balance :=
-AVERAGEX( VALUES( Calendar[Date] ), CALCULATE( SUM( Balance[Balance] ) ) )
+AVERAGEX( VALUES( 'Calendar'[Date Key] ), CALCULATE( SUM( Balance[Balance] ) ) )
 ```
 
 ---
@@ -57,20 +66,20 @@ AVERAGEX( VALUES( Calendar[Date] ), CALCULATE( SUM( Balance[Balance] ) ) )
 
 Only one active relationship per table pair. Activate inactive relationships inside CALCULATE.
 
-**Model:** `Sales[OrderDateKey] → Calendar[DateKey]` **(ACTIVE)**; ShipDateKey, DueDateKey **(INACTIVE)**.
+**Model:** `Sales[OrderDateKey] → 'Calendar'[Date Key]` **(ACTIVE)**; ShipDateKey, DueDateKey **(INACTIVE)**.
 
 ```dax
 Sales by Ship Date :=
-CALCULATE( [Total Sales], USERELATIONSHIP( Sales[ShipDateKey], Calendar[DateKey] ) )
+CALCULATE( [Total Sales], USERELATIONSHIP( Sales[ShipDateKey], 'Calendar'[Date Key] ) )
 
 -- Combine USERELATIONSHIP with time intelligence in same CALCULATE
 Sales Ship YTD :=
 CALCULATE( [Total Sales],
-    USERELATIONSHIP( Sales[ShipDateKey], Calendar[DateKey] ),
-    DATESYTD( Calendar[Date] ) )
+    USERELATIONSHIP( Sales[ShipDateKey], 'Calendar'[Date Key] ),
+    DATESYTD( 'Calendar'[Date Key] ) )
 ```
 
-**Alternative:** Use separate view-sourced tables (`DimOrderDate`, `DimShipDate`, `DimDueDate`) each with an active relationship. Preferred for heavy time intelligence on multiple date roles — no `USERELATIONSHIP` needed.
+**Preferred approach (SQLBI standard):** Use `USERELATIONSHIP` with inactive relationships — one `Calendar` table with multiple inactive FK columns pointing to it (`ShipDateKey`, `DueDateKey`, etc.). This is simpler, avoids duplicate Calendar data, and keeps time intelligence on a single marked Date Table.
 
 **Pitfalls:** `USERELATIONSHIP` deactivates the active relationship for the CALCULATE scope. Set cross-filter to **Single** on inactive relationships — bidirectional + USERELATIONSHIP causes unexpected results on-prem.
 
@@ -103,7 +112,31 @@ RANKX( ALLSELECTED( DimProduct[ProductName] ), [Total Sales],, DESC, DENSE )
 
 ---
 
-## 10. Variables (VAR) — Performance in On-Prem SSAS
+## 9b. Filter-Removal Cheat Sheet
+
+Quick reference: which function to use when you need to remove or modify filters in DAX.
+
+| Function | What it clears | Retains slicer/page context | Use case |
+|---|---|---|---|
+| `ALL( 'Table' )` | All filters on the whole table | ❌ | Grand total denominators; absolute % of total |
+| `ALL( 'Table'[Column] )` | Filters on one column only | ❌ | % within category (clear product filter, keep date filter) |
+| `ALLEXCEPT( 'Table', Col1, Col2 )` | All filters on the table *except* named columns | ❌ | Running totals with a preserved dimension |
+| `ALLSELECTED( 'Table' )` | Inner filters (removes row/col context) | ✅ | Visual-relative totals; % within slicer selection |
+| `ALLSELECTED( 'Table'[Column] )` | Inner filter on one column | ✅ | Column-level % within current visual scope |
+| `REMOVEFILTERS( 'Table' )` | Same as `ALL( 'Table' )` — aliases `ALL` | ❌ | Modern syntax; prefer in new measures for readability |
+| `REMOVEFILTERS( 'Table'[Column] )` | Same as `ALL( 'Table'[Column] )` | ❌ | Modern syntax; same as `ALL` on a column |
+| `KEEPFILTERS( expr )` | Adds filter without removing existing | n/a (additive) | Intersect new filter with existing context; prevents filter overwrite in `CALCULATE` |
+| `CALCULATE( …, filter )` | Adds/replaces filter on columns in filter expression | Depends | Default `CALCULATE` modifier — replaces existing column filters |
+| `CALCULATETABLE( …, filter )` | Same as CALCULATE but returns a table | Depends | Use for filtered table results, not scalar measures |
+
+> **Decision rule (SQLBI):**
+> 1. Need absolute %-of-total? → `ALL( Column )`
+> 2. Need %-within-slicer-selection? → `ALLSELECTED( Column )`
+> 3. Need to preserve some filters, remove others? → `ALLEXCEPT( Table, keepCol )`
+> 4. Want additive filtering (intersection)? → `KEEPFILTERS()`
+> 5. Need running total that ignores row context? → `ALLEXCEPT( Table, DateColumn )`
+
+
 
 `VAR` evaluates once and caches the result for the measure instance. Inline subexpressions may be evaluated multiple times (multiple SE queries).
 
@@ -120,13 +153,13 @@ RETURN DIVIDE( Revenue - Cost, Revenue )
 -- Context save pattern: VAR captures filter context at declaration point
 Sales YoY% :=
 VAR Curr = [Total Sales]
-VAR Prev = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
+VAR Prev = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) )
 RETURN DIVIDE( Curr - Prev, Prev )
 
 -- Conditional with VAR (avoids double evaluation)
 Conditional Growth :=
 VAR Sales   = [Total Sales]
-VAR PYSales = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( Calendar[Date] ) )
+VAR PYSales = CALCULATE( [Total Sales], SAMEPERIODLASTYEAR( 'Calendar'[Date Key] ) )
 VAR Growth  = DIVIDE( Sales - PYSales, PYSales )
 RETURN IF( ISBLANK( PYSales ), BLANK(), IF( PYSales = 0, BLANK(), Growth ) )
 ```

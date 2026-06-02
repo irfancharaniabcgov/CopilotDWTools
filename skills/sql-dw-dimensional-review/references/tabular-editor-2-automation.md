@@ -165,13 +165,18 @@ foreach (var col in Model.AllColumns.Where(c => !c.IsHidden))
 
 ### 3d. `HideKeyColumns.cs`
 
-Hide all surrogate key columns (`{Entity}Key` pattern) — the SSAS model exposes only business attributes; keys live behind the scenes for relationships only. `_Source*` natural keys are left untouched (the script only matches the surrogate pattern).
+Hide all surrogate key columns (`{Entity}Key` pattern) and `_Source*` natural key columns — the SSAS model exposes only business attributes; keys live behind the scenes for relationships only. The `!col.Name.Contains(" ")` guard ensures visible dimension attributes such as `[Date Key]` (Calendar) are not accidentally hidden.
 
 ```csharp
 // HideKeyColumns.cs
 foreach (var col in Model.AllColumns)
 {
-    if (col.Name.EndsWith("Key") && !col.Name.StartsWith("_Source"))
+    // Hide {Entity}Key surrogate keys — no spaces, ends with "Key"
+    // Guard: !Contains(" ") prevents hiding 'Calendar'[Date Key] and similar
+    if (col.Name.EndsWith("Key") && !col.Name.Contains(" "))
+        col.IsHidden = true;
+    // Hide _Source* natural key columns (source system IDs not surfaced in reports)
+    else if (col.Name.StartsWith("_Source"))
         col.IsHidden = true;
 }
 ```
