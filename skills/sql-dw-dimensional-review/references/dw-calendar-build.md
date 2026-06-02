@@ -10,7 +10,7 @@ objects in the OLTP database.
 |---|---|---|
 | Primary key type | `DATE` (`DateKey DATE`) | `DATE` (`[Date Key] DATE`) — matches OLTP |
 | Integer date surrogate | `YYYYMMDD` implicit in int columns | `[YYYYMMDD] INT` separate column; `[YYYYMM] CHAR(6)` |
-| Unknown/sentinel rows | `'1753-01-01'` (min) / `'9999-12-31'` (max) | `'1900-01-01'` (unknown); `'9999-12-31'` (open/future) |
+| Unknown/sentinel rows | `'1753-01-01'` (min) / `'9999-12-31'` (max) | `'1753-01-01'` (unknown); `'9999-12-31'` (open/future) — matches OLTP |
 | Fact table FK type | `DATE` | `DATE` — FK columns match Calendar PK |
 | Open event sentinel | `EndDate = '9999-12-31'` | `[End Date Key] = '9999-12-31'` |
 | Load approach | `WHILE` loop (row-by-row) | Recursive CTE (set-based — 10–100× faster) |
@@ -24,9 +24,9 @@ objects in the OLTP database.
 - Week numbering: Sunday-start (`DATEFIRST 7`)
 
 **Fact table date FK columns:** Because `[Date Key]` is `DATE`, all fact table date FK
-columns (e.g., `[Date Key]`, `[Order Date Key]`, `[Ship Date Key]`) must also be `DATE`.
-Use `'9999-12-31'` as the sentinel value for open/no-end events. Use `'1900-01-01'` for
-unknown/null dates that must resolve to a Calendar row.
+columns (e.g., `[Date Key]`, `[Order Date Key]`, `[Ship Date Key]`) must also be `DATE NOT NULL`
+— no NULLs permitted. Use `'1753-01-01'` as the sentinel for unknown/inapplicable dates
+(matches OLTP convention) and `'9999-12-31'` for open/no-end events.
 
 ---
 
@@ -174,7 +174,7 @@ END
 > **Unknown / sentinel rows:**
 > | Row | `[Date Key]` | Purpose |
 > |-----|-------------|---------|
-> | Unknown | `'1900-01-01'` | FK target when source date is NULL or unknown |
+> | Unknown | `'1753-01-01'` | FK target when source date is NULL or unknown — matches OLTP min sentinel |
 > | Open/future | `'9999-12-31'` | FK target for events with no end date (SCD Type 2, open subscriptions, etc.) |
 >
 > These rows are inserted by `Dimension.PopulateCalendar` before the main date range.
@@ -194,7 +194,7 @@ BEGIN
     MERGE [Dimension].[Calendar] AS [target]
     USING (
         VALUES
-            (CAST('1900-01-01' AS DATE)),  -- unknown
+            (CAST('1753-01-01' AS DATE)),  -- unknown (matches OLTP min sentinel)
             (CAST('9999-12-31' AS DATE))   -- open/future
     ) AS [source] ([Date Key])
     ON [target].[Date Key] = [source].[Date Key]
@@ -417,7 +417,7 @@ BEGIN
         [Is Stat Holiday]  = 0,
         [Stat Holiday Name] = NULL
     FROM [Dimension].[Calendar] c
-    WHERE c.[Date Key] > '1900-01-01'
+    WHERE c.[Date Key] > '1753-01-01'
       AND c.[Date Key] < '9999-12-31'
       AND c.[Is Stat Holiday] = 1
       AND NOT EXISTS (
@@ -502,14 +502,14 @@ AS
         DATEDIFF(MONTH, c.[Date Key], CAST(GETDATE() AS DATE))  AS [Relative Month]
 
     FROM [Dimension].[Calendar] c
-    WHERE c.[Date Key] > '1900-01-01'   -- exclude unknown sentinel
+    WHERE c.[Date Key] > '1753-01-01'   -- exclude unknown sentinel
       AND c.[Date Key] < '9999-12-31';  -- exclude open/future sentinel
 GO
 ```
 
 > **Sentinel row exclusion:** The view filters out both sentinel rows so SSAS only
 > sees real dates. Reference the sentinels directly from `Dimension.Calendar` in ELT
-> fact-load queries (e.g., `ISNULL([source].[OrderDate], '1900-01-01')` for unknown
+> fact-load queries (e.g., `ISNULL([source].[OrderDate], '1753-01-01')` for unknown
 > dates, `CAST('9999-12-31' AS DATE)` for open SCD Type 2 rows).
 
 ---
@@ -644,7 +644,7 @@ ON [target].[Stat Holiday Date] = [source].[Stat Holiday Date]
 [ ] 3. Validate row count: SELECT COUNT(*) FROM Dimension.Calendar  → expect 18,628 + 2 sentinels
 [ ] 4. Verify sentinel rows present:
         SELECT [Date Key] FROM Dimension.Calendar
-        WHERE [Date Key] IN ('1900-01-01', '9999-12-31')
+        WHERE [Date Key] IN ('1753-01-01', '9999-12-31')
 [ ] 5. Spot-check fiscal year labels:
         SELECT [Date Key], [Fiscal Year], [Fiscal Year Name], [Fiscal Period]
         FROM Dimension.Calendar

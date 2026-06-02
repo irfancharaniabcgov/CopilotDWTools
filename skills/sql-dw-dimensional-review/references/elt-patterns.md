@@ -820,7 +820,7 @@ BEGIN
         -- Step 1: ensure Unknown member exists
         IF NOT EXISTS (SELECT 1 FROM [Dimension].[Customer] WHERE [CustomerKey] = -1)
             INSERT INTO [Dimension].[Customer] ([CustomerKey], [_SourceCustomerID], [CustomerName], [IsCurrent], [RowEffectiveDate], [RowExpirationDate], [LineageKey])
-            VALUES (-1, -1, 'Unknown', 1, '1900-01-01', '9999-12-31', NULL);
+            VALUES (-1, -1, 'Unknown', 1, '1753-01-01', '9999-12-31', NULL);
 
         -- Step 2: expire changed current rows
         UPDATE d

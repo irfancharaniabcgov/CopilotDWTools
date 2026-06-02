@@ -420,7 +420,7 @@ CREATE TABLE [Snapshots].[OrderFulfilment]
 (
     -- Natural key (not surrogate — row is updated, not inserted)
     OrderID                 INT           NOT NULL,
-    -- Milestone date keys (FK to Dimension.Calendar; '1900-01-01' = not yet reached)
+    -- Milestone date keys (FK to Dimension.Calendar; '1753-01-01' = not yet reached — no NULLs)
     OrderDateKey            DATE          NOT NULL,
     PickedDateKey           DATE          NOT NULL,
     ShippedDateKey          DATE          NOT NULL,
@@ -449,7 +449,7 @@ Load pattern: SPs named `Snapshots.Load{Entity}` — use MERGE to update existin
 | Date keys | 1 (event date) | 1 (snapshot date) | Multiple milestone dates |
 | Schema | `Fact` | `Snapshots` | `Snapshots` |
 | Load SP | `Fact.Load{Entity}` | `Snapshots.Load{Entity}{Freq}` | `Snapshots.Load{Entity}` |
-| Unknown member | Yes (for all FKs) | Yes | `'1900-01-01'` for unreached milestones |
+| Unknown member | Yes (for all FKs) | Yes | `'1753-01-01'` for unreached milestones; no NULLs |
 
 ### SSAS representation
 - Periodic snapshots: exposed as a separate SSAS table via `SSAS.{Name}` view — same rules as fact SSAS views
@@ -468,7 +468,7 @@ CALCULATE(
 |---|---|
 | Snapshots schema used (not Fact) for periodic/accumulating | 🟡 MEDIUM |
 | Accumulating snapshot uses MERGE (not INSERT only) | 🟠 HIGH |
-| Unreached milestone date keys use `'1900-01-01'` DATE (not NULL, 0, or -1 INT) | 🟠 HIGH |
+| Unreached milestone date keys use `'1753-01-01'` DATE (not NULL, 0, or -1); all date FKs are NOT NULL | 🟠 HIGH |
 | SSAS views follow Title Case alias rules | 🟠 HIGH |
 | Inactive relationships + USERELATIONSHIP() for multi-date accumulating | 🟡 MEDIUM |
 

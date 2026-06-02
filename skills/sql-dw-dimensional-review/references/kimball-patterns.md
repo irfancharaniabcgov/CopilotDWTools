@@ -159,8 +159,8 @@ In SSAS Tabular: create inactive relationships; activate with `USERELATIONSHIP()
 -- Fact table with role-playing date keys (DATE type — matches Calendar PK)
 ALTER TABLE [Fact].[SalesOrder] ADD
     [Order Date Key]  DATE NOT NULL REFERENCES [Dimension].[Calendar]([Date Key]),
-    [Ship Date Key]   DATE     NULL REFERENCES [Dimension].[Calendar]([Date Key]),
-    [Due Date Key]    DATE     NULL REFERENCES [Dimension].[Calendar]([Date Key]);
+    [Ship Date Key]   DATE NOT NULL REFERENCES [Dimension].[Calendar]([Date Key]),
+    [Due Date Key]    DATE NOT NULL REFERENCES [Dimension].[Calendar]([Date Key]);
 ```
 
 ### Junk Dimension
@@ -549,9 +549,9 @@ INSERT INTO [Dimension].[Customer] (
     CustomerKey, _SourceCustomerID, CustomerName, City, StateCode,
     RowEffectiveDate, RowExpirationDate, IsCurrent, LineageKey
 ) VALUES
-    (-1, -1, 'Unknown',        'Unknown',  'XX', '1900-01-01', '9999-12-31', 1, NULL),
-    (-2, -2, 'Not Applicable', 'N/A',      'XX', '1900-01-01', '9999-12-31', 1, NULL),
-    (-3, -3, 'Pending',        'Pending',  'XX', '1900-01-01', '9999-12-31', 1, NULL);
+    (-1, -1, 'Unknown',        'Unknown',  'XX', '1753-01-01', '9999-12-31', 1, NULL),
+    (-2, -2, 'Not Applicable', 'N/A',      'XX', '1753-01-01', '9999-12-31', 1, NULL),
+    (-3, -3, 'Pending',        'Pending',  'XX', '1753-01-01', '9999-12-31', 1, NULL);
 SET IDENTITY_INSERT [Dimension].[Customer] OFF;
 ```
 
