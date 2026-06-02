@@ -15,7 +15,7 @@ objects in the OLTP database.
 | Open event sentinel | `EndDate = '9999-12-31'` | `[End Date Key] = '9999-12-31'` |
 | Load approach | `WHILE` loop (row-by-row) | Recursive CTE (set-based — 10–100× faster) |
 | Column naming | camelCase / no spaces | Title Case with spaces — SSAS/Kimball convention |
-| StatHolidays | `dbo.stat_holiday` (BC + audit cols) | `Dimension.StatHolidays` (same structure, updated generator) |
+| StatHolidays | `dbo.stat_holiday` (BC + audit cols) | `Dimension.StatHolidays` (simplified — no audit cols) |
 
 **Fiscal year convention (org standard — confirmed from `dbo.LoadCalendar`):**
 - Fiscal year = **starting** calendar year: **FY2024 = Apr 1, 2024 – Mar 31, 2025**
@@ -46,9 +46,6 @@ BEGIN
         [Stat Holiday Key]  INT           NOT NULL IDENTITY(1, 1),
         [Stat Holiday Date] DATE          NOT NULL,
         [Stat Holiday Name] NVARCHAR(200) NOT NULL,
-        [Entry Date]        DATETIME2(7)  NOT NULL CONSTRAINT [DF_StatHolidays_EntryDate]  DEFAULT (GETDATE()),
-        [Update Date]       DATETIME2(7)  NULL,
-        [Is Deleted]        BIT           NOT NULL CONSTRAINT [DF_StatHolidays_IsDeleted] DEFAULT (0),
         CONSTRAINT [PK_Dimension_StatHolidays]
             PRIMARY KEY CLUSTERED ([Stat Holiday Key]),
         CONSTRAINT [UQ_Dimension_StatHolidays_Date]
@@ -82,13 +79,13 @@ USING (
         (CAST('2024-12-26' AS DATE), N'Boxing Day')
 ) AS [source] ([Stat Holiday Date], [Stat Holiday Name])
 ON [target].[Stat Holiday Date] = [source].[Stat Holiday Date]
-WHEN MATCHED AND [target].[Is Deleted] = 0 THEN
-    UPDATE SET
-        [Stat Holiday Name] = [source].[Stat Holiday Name],
-        [Update Date]       = GETDATE()
+WHEN MATCHED THEN
+    UPDATE SET [Stat Holiday Name] = [source].[Stat Holiday Name]
 WHEN NOT MATCHED BY TARGET THEN
     INSERT ([Stat Holiday Date], [Stat Holiday Name])
-    VALUES ([source].[Stat Holiday Date], [source].[Stat Holiday Name]);
+    VALUES ([source].[Stat Holiday Date], [source].[Stat Holiday Name])
+WHEN NOT MATCHED BY SOURCE THEN
+    DELETE;
 ```
 
 > **BC policy quirks:**
@@ -412,8 +409,7 @@ BEGIN
         [Stat Holiday Name] = h.[Stat Holiday Name]
     FROM [Dimension].[Calendar] c
     JOIN [Dimension].[StatHolidays] h
-        ON h.[Stat Holiday Date] = c.[Date Key]
-        AND h.[Is Deleted] = 0;
+        ON h.[Stat Holiday Date] = c.[Date Key];
 
     -- Clear any removed holidays
     UPDATE c
@@ -427,7 +423,6 @@ BEGIN
       AND NOT EXISTS (
           SELECT 1 FROM [Dimension].[StatHolidays] h
           WHERE h.[Stat Holiday Date] = c.[Date Key]
-            AND h.[Is Deleted] = 0
       );
 END
 ```
