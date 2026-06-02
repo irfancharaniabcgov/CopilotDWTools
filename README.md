@@ -1,8 +1,12 @@
 ﻿# CopilotDWTools
 
 A toolkit of GitHub Copilot agents and skills for on-premises SQL Server Data Warehouse,
-SSAS Tabular, SSIS ELT, and Power BI Report Server development. Based on Kimball methodology,
-SQLBI/DAX Patterns, and Tabular Editor 2 BPA rules.
+SSAS Tabular, SSIS ELT, and Power BI Report Server development.
+
+**Authority hierarchy:**
+- **SQLBI (Marco Russo & Alberto Ferrari / daxpatterns.com)** — primary authority for SSAS Tabular model design and DAX. When SQLBI guidance conflicts with Kimball, SQLBI wins for the semantic layer.
+- **Kimball Dimensional Modeling** — foundational authority for physical DW design (fact/dimension schema, SCD types, bus matrix, grain declaration).
+- **Tabular Editor 2** — tooling authority for BPA automation, C# scripting, and CLI deployment on-premises (TE3 is cloud/Premium-only for automatic aggregations).
 
 ---
 

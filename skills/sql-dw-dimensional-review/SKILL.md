@@ -55,20 +55,30 @@ Activate when the user asks to:
 
 | File | Use When |
 |---|---|
-| `references/kimball-patterns.md` | Fact/dim design review, grain definition, SCD identification, bus matrix, bridge tables |
-| `references/sqlbi-dax-patterns.md` | DAX measure review, time intelligence, semi-additive, many-to-many, calculation groups |
-| `references/ssas-tabular-bp.md` | SSAS Tabular model review, naming conventions, relationships, DMV queries, partition strategy |
+| `references/kimball-patterns.md` | Fact/dim design review, grain definition, SCD identification, bus matrix, bridge tables. **SQLBI authority applies to semantic layer — use this for physical DW design only.** |
+| `references/kimball-advanced-patterns.md` | Data Vault bridging, late-arriving facts, snapshot DDL, advanced physical design. **SQLBI authority applies to semantic layer.** |
+| `references/sqlbi-dax-patterns.md` | DAX measure review, time intelligence, semi-additive, many-to-many, calculation groups. **Primary authority for all DAX.** |
+| `references/sqlbi-dax-patterns-advanced.md` | Situational DAX: paginated report parameters, M2M TREATAS, disconnected tables, aggregations |
+| `references/sqlbi-dax-patterns-niche.md` | Rare patterns: currency conversion, survey/weighted average. Use sparingly. |
+| `references/ssas-tabular-bp.md` | SSAS Tabular model review, naming conventions, relationships, DMV queries, partition strategy, BPA rules |
+| `references/dax-style-guide.md` | DAX coding standard (naming, formatting, VAR/RETURN, filter functions, upstream-first principle) |
+| `references/dax-studio-workflow.md` | DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking, storage engine query analysis |
 | `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts; InformationType + SensitivityLabel classification |
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
+| `references/dw-validation-patterns.md` | T-SQL validation queries: orphan facts, unknown members, calendar completeness, reconciliation |
+| `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning (DATE type), physical design checklist |
+| `references/dw-calendar-build.md` | Dimension.Calendar DDL + population SP (2000–2050, Apr–Mar fiscal), StatHolidays table, SSAS.v_Calendar view, sentinel design |
 | `references/elt-patterns.md` | ELT pipeline review, SSIS 4-package structure, source SP patterns, staging/transform design |
+| `references/ssdt-project-structure.md` | SSDT project layout, DACPAC publish profiles, pre/post-deploy scripts, database project conventions |
+| `references/ssisdb-catalog-config.md` | SSISDB topology, environment variables, JSON config format, catalog configuration |
+| `references/ssas-deployment-processing.md` | TE2 deploy commands, processing modes (ProcessFull/ProcessAdd/ProcessUpdate), SQL Agent job pattern |
+| `references/tabular-editor-2-automation.md` | TE2 CLI flags, C# scripts library (HideKeyColumns, SetDisplayFolders, ApplyTitleCaseAliases), BPA rule JSON |
 | `references/devops-deployment-patterns.md` | ADO Server Classic pipeline structure, DACPAC/SSIS/SSAS/PBIRS deployment scripts |
 | `references/devops-operations-patterns.md` | ELT trigger, PowerShell standards, repo structure, shared PS library, ALM Toolkit, roll-forward incident response |
+| `references/security-implementation.md` | PBIRS→SSAS→DW connection chain, SQL least-privilege grants, SSAS Tabular roles (fixed + TREATAS dynamic RLS), OLS, PBIRS folder permissions |
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
-| `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment pattern |
-| `references/pbix-report-standards.md` | **Required** Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
-| `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning decision rules, physical design checklist, shared-instance considerations |
-| `references/dw-calendar-build.md` | Dimension.Calendar DDL + population SP (2000–2050, Apr–Mar fiscal, Sunday-start weeks), Dimension.StatHolidays table, SSAS.v_Calendar view (holiday + relative date columns), SSAS Tabular configuration notes |
-| `references/security-implementation.md` | PBIRS→SSAS→DW connection chain, SQL least-privilege grants, SSAS Tabular roles (fixed + dynamic RLS), OLS patterns, PBIRS folder permission scripts, anti-patterns |
+| `references/pbix-report-standards.md` | Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
+| `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment |
 
 ## Operating Modes
 

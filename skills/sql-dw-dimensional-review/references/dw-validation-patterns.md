@@ -70,15 +70,22 @@ Run these checks after executing `Dimension.Load{Entity}`.
 
 ### 2a. Unknown Member Row
 
-Every dimension must include one unknown member row, using `{EntityName}Key = 0` or `{EntityName}Key = -1` according to the project convention.
+Every dimension must include exactly **one** unknown member row with `{EntityName}Key = -1`. This is the org standard (single sentinel, not multiple -2/-3 variants).
 
 ```sql
 SELECT COUNT(*) AS UnknownMemberExists
 FROM [Dimension].[{EntityName}]
-WHERE [{EntityName}Key] IN (0, -1);
+WHERE [{EntityName}Key] = -1;
 ```
 
-Expected result: 1. Missing unknown member support is a CRITICAL finding because orphan facts will not have a safe fallback member.
+Expected result: 1. Missing unknown member is a CRITICAL finding — orphan fact rows have no safe fallback.
+
+> **Date dimension sentinel:** `Dimension.Calendar` uses `DATE` type FK, not INT. The sentinel date key is `'1753-01-01'` (not -1). Verify with:
+> ```sql
+> SELECT COUNT(*) AS SentinelExists FROM [Dimension].[Calendar] WHERE [Date Key] = '1753-01-01';
+> -- Expected: 1
+> ```
+> The SSAS view (`SSAS.v_Calendar`) filters this row out — it exists only for SQL FK constraint integrity.
 
 ### 2b. SCD Type 2 Current Row Uniqueness
 
@@ -96,24 +103,28 @@ Expected result: 0 rows. Multiple current rows for a natural key indicate data c
 
 ### 2c. Calendar Completeness
 
-The calendar must cover the full range of date keys used in fact tables.
+The calendar must cover the full range of date keys used in fact tables, and must be contiguous.
 
 ```sql
 SELECT 
-    MIN(DateKey) AS CalendarMin,
-    MAX(DateKey) AS CalendarMax,
-    COUNT(*) AS CalendarRows
-FROM [Dimension].[Calendar];
+    MIN([Date Key]) AS CalendarMin,
+    MAX([Date Key]) AS CalendarMax,
+    COUNT(*) AS CalendarRows,
+    DATEDIFF(DAY, MIN([Date Key]), MAX([Date Key])) + 1 AS ExpectedRows
+FROM [Dimension].[Calendar]
+WHERE [Date Key] > '1753-01-01' AND [Date Key] < '9999-12-31';  -- exclude sentinels
+-- CalendarRows must = ExpectedRows (no gaps)
 ```
-
-Verify that `CalendarMin` is less than or equal to the earliest fact `DateKey`, and `CalendarMax` is greater than or equal to the latest fact `DateKey`.
 
 ```sql
 SELECT
-    MIN(f.[DateKey]) AS FactMinDateKey,
-    MAX(f.[DateKey]) AS FactMaxDateKey
-FROM [Fact].[{FactName}] f;
+    MIN(f.[Order Date Key]) AS FactMinDateKey,
+    MAX(f.[Order Date Key]) AS FactMaxDateKey
+FROM [Fact].[{FactName}] f
+WHERE f.[Order Date Key] > '1753-01-01';  -- exclude sentinel rows from range check
 ```
+
+Verify that `CalendarMin ≤ FactMinDateKey` and `CalendarMax ≥ FactMaxDateKey`.
 
 ## 3. Fact Table Validation
 
@@ -135,17 +146,23 @@ Expected result: 0 rows. Any orphan rows are a CRITICAL finding.
 
 ### 3b. Invalid Date Keys
 
-Date keys must exist in `Dimension.Calendar`. A date key of 0 is valid only if 0 is the project's unknown calendar member.
+Date FK columns in fact tables use `DATE` type. The org sentinel for unknown/missing dates is `'1753-01-01'` — this is **valid** and must not be flagged as an orphan. Only true NULLs or dates not in `Dimension.Calendar` (excluding the sentinel itself) are invalid.
 
 ```sql
+-- Check for NULLs (should be 0 — sentinel '1753-01-01' is used instead of NULL)
+SELECT COUNT(*) AS NullDateKeys
+FROM [Fact].[{FactName}]
+WHERE [{Role}Date Key] IS NULL;
+
+-- Check for orphan date keys (dates not in Calendar, excluding sentinel which is valid)
 SELECT COUNT(*) AS InvalidDateKeys
 FROM [Fact].[{FactName}] f
 LEFT JOIN [Dimension].[Calendar] c
-    ON f.[DateKey] = c.[DateKey]
-WHERE c.[DateKey] IS NULL;
+    ON f.[{Role}Date Key] = c.[Date Key]
+WHERE c.[Date Key] IS NULL;
 ```
 
-Expected result: 0 rows.
+Expected results: both queries return 0. A non-zero result on the second query indicates rows whose date is not in the Calendar range — typically future dates beyond `MAX([Date Key])` or dates from source data that pre-date Calendar's lower bound.
 
 ### 3c. Row Count vs Prior Load
 

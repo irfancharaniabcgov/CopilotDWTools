@@ -95,7 +95,7 @@ Limitations:
 
 ### 3.4 Dynamic RLS (Requires Architecture Change)
 
-Dynamic RLS uses `USERNAME()` or `USERPRINCIPALNAME()` in DAX filters to resolve the current user against a permissions table in the model.
+Dynamic RLS uses `USERNAME()` in DAX filters to resolve the current user against a permissions table in the model. **Always use `USERNAME()`** (returns `DOMAIN\username`) on-premises — `USERPRINCIPALNAME()` is designed for Azure AS and is unreliable with on-premises SSAS + Kerberos delegation.
 
 **Prerequisite:** SSAS must receive the end-user identity, not only the PBIRS service account identity.
 
@@ -124,13 +124,27 @@ CREATE TABLE [Security].[User Permissions] (
 3. Apply a DAX role filter on the restricted dimension.
 
 ```dax
+-- Option A: CALCULATETABLE pattern (standard)
 -- Role filter on 'Dimension Region' table
 [Region Code] IN
     CALCULATETABLE(
         VALUES( 'Security User Permissions'[Permitted Value] ),
-        'Security User Permissions'[User Principal Name] = USERPRINCIPALNAME()
+        'Security User Permissions'[User Name] = USERNAME()
             && 'Security User Permissions'[Dimension Name] = "Region"
     )
+
+-- Option B: TREATAS pattern (SQLBI preferred — no relationship required between security table and target dim)
+-- Role filter on 'Dimension Region' table
+COUNTROWS(
+    TREATAS(
+        CALCULATETABLE(
+            VALUES( 'Security User Permissions'[Permitted Value] ),
+            'Security User Permissions'[User Name] = USERNAME()
+                && 'Security User Permissions'[Dimension Name] = "Region"
+        ),
+        'Dimension Region'[Region Code]
+    )
+) > 0
 ```
 
 4. Assign the target Windows users or AD groups to one shared dynamic role.
@@ -227,7 +241,7 @@ Invoke-RestMethod -Method Post `
 [ ] 7. Test role filter in DAX Studio:
        Set EffectiveUserName or CustomData to test user; verify row counts
 [ ] 8. For fixed roles: update PBIRS data source connection strings to include Roles= property
-[ ] 9. For dynamic RLS: populate [Security].[User Permissions] and verify DAX USERNAME() or USERPRINCIPALNAME() output
+[ ] 9. For dynamic RLS: populate [Security].[User Permissions] and verify DAX `USERNAME()` returns `DOMAIN\username` correctly under impersonation
 [ ] 10. Document role design decision (fixed vs dynamic) in model README
 ```
 

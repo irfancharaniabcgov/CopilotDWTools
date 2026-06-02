@@ -210,6 +210,95 @@ DIVIDE(
 | Hardcoded dates | Breaks across fiscal years and calendar changes | Use `'Calendar'` relative period columns |
 | `TODAY()` or `NOW()` in cached measures | Cached results can appear stale after processing | Use a `'Calendar'[Is Today]` flag or a data freshness pattern |
 | Referencing any date table other than `'Calendar'` | Date relationships and standard time intelligence may not work correctly | Always use `'Calendar'` |
+| `USERPRINCIPALNAME()` in RLS | Unreliable on-premises with Kerberos delegation | Use `USERNAME()` which returns `DOMAIN\username` |
+| Bidirectional many-to-many without bridge table | Explosive filter expansion, ambiguous row context | Use bridge table + `TREATAS` |
+
+---
+
+## Filter-Context Functions — Style Guide
+
+### ALL / ALLEXCEPT / ALLSELECTED / REMOVEFILTERS
+
+Use these functions deliberately. The wrong choice produces silently incorrect totals.
+
+```dax
+-- ALL(Table) — removes ALL filters on the table; absolute denominator
+Sales % Grand Total :=
+DIVIDE( [Total Sales], CALCULATE( [Total Sales], ALL( 'Fact Sales' ) ) )
+
+-- ALL(Column) — removes filter on one column only
+Sales % of Category :=
+DIVIDE( [Total Sales], CALCULATE( [Total Sales], ALL( 'Dimension Product'[Product Name] ) ) )
+
+-- ALLEXCEPT — remove all filters on a table except specified columns
+Running Total Sales :=
+CALCULATE( [Total Sales],
+    ALLEXCEPT( 'Calendar', 'Calendar'[Year] ),
+    'Calendar'[Date Key] <= MAX( 'Calendar'[Date Key] ) )
+
+-- ALLSELECTED — preserve outer (slicer/page) context; relative to visual selection
+Sales % of Slicer Selection :=
+DIVIDE( [Total Sales], CALCULATE( [Total Sales], ALLSELECTED( 'Dimension Product'[Category] ) ) )
+
+-- REMOVEFILTERS — modern alias for ALL; prefer in new measures for readability
+Sales vs Budget :=
+DIVIDE( [Total Sales], CALCULATE( [Total Budget], REMOVEFILTERS( 'Calendar'[Month] ) ) )
+```
+
+**Decision rule:** 
+- Need % of absolute grand total? → `ALL( Column )`
+- Need % within the current slicer selection? → `ALLSELECTED( Column )`  
+- Need running total or cumulative, ignoring row context for one dimension? → `ALLEXCEPT( Table, DateColumn )`
+- New measure (no legacy constraints)? → `REMOVEFILTERS()` over `ALL()` for clarity
+
+### KEEPFILTERS
+
+Use `KEEPFILTERS()` inside `CALCULATE` when you want the new filter to **intersect** with the existing filter context rather than replace it:
+
+```dax
+-- Without KEEPFILTERS: filter context for Category is REPLACED with "Clothing"
+-- → shows Clothing total even if user has selected a different category in a slicer
+Clothing Sales :=
+CALCULATE( [Total Sales], 'Dimension Product'[Category] = "Clothing" )
+
+-- With KEEPFILTERS: filter context is INTERSECTED
+-- → returns BLANK if user's slicer selection doesn't include "Clothing"
+Clothing Sales (Filtered) :=
+CALCULATE( [Total Sales], KEEPFILTERS( 'Dimension Product'[Category] = "Clothing" ) )
+```
+
+### TREATAS
+
+Use `TREATAS` to virtually relate two tables **without adding a physical relationship** to the model. Essential for security patterns, M2M bridge patterns, and What-If parameters.
+
+```dax
+-- Apply a filter from a disconnected table to a related dimension
+Sales in Selected Region :=
+CALCULATE( [Total Sales],
+    TREATAS(
+        VALUES( 'DimScenarioRegion'[Region Code] ),
+        'Dimension Region'[Region Code]
+    )
+)
+
+-- Dynamic RLS alternative using TREATAS (SQLBI preferred for security tables)
+-- Role table filter expression on 'Dimension Region':
+COUNTROWS(
+    TREATAS(
+        CALCULATETABLE(
+            VALUES( 'Security User Permissions'[Permitted Value] ),
+            'Security User Permissions'[User Name] = USERNAME()
+        ),
+        'Dimension Region'[Region Code]
+    )
+) > 0
+```
+
+**When to use TREATAS vs relationship:**
+- `TREATAS`: disconnected tables, security patterns, M2M without physical relationship, parameter tables
+- Physical relationship: standard fact-to-dimension, role-playing date FKs (use `USERELATIONSHIP`)
+
+
 
 ## Display folder conventions
 

@@ -195,23 +195,23 @@ into the live partition with a metadata-only operation.
 
 ```sql
 -- Step 1: Create partition function and scheme (one-time, done by DBA or pipeline)
-CREATE PARTITION FUNCTION [PF_Fact_ByYear] (INT)
-AS RANGE RIGHT FOR VALUES (20200101, 20210101, 20220101, 20230101, 20240101);
+CREATE PARTITION FUNCTION [PF_Fact_ByYear] (DATE)
+AS RANGE RIGHT FOR VALUES ('2020-01-01', '2021-01-01', '2022-01-01', '2023-01-01', '2024-01-01');
 
 CREATE PARTITION SCHEME [PS_Fact_ByYear]
 AS PARTITION [PF_Fact_ByYear] ALL TO ([PRIMARY]);
 
--- Step 2: Fact table uses the partition scheme on DateKey
+-- Step 2: Fact table uses the partition scheme on [Date Key] (DATE type, matching Calendar FK)
 CREATE TABLE [Fact].[Sales] (
-    [Date Key]     INT NOT NULL,
-    [Product Key]  INT NOT NULL,
+    [Date Key]     DATE NOT NULL,
+    [Product Key]  INT  NOT NULL,
     -- ... remaining columns
 ) ON [PS_Fact_ByYear] ([Date Key]);
 
 -- Step 3: Staging table for the incoming partition (must match schema exactly)
 CREATE TABLE [Staging].[Sales_Incoming] (
-    [Date Key]     INT NOT NULL,
-    [Product Key]  INT NOT NULL,
+    [Date Key]     DATE NOT NULL,
+    [Product Key]  INT  NOT NULL,
     -- ... remaining columns
 ) ON [PRIMARY];
 
@@ -223,7 +223,7 @@ SELECT ... FROM [Staging].[Sales]; -- transform result
 
 -- Switch the staging table into partition N of the live table
 ALTER TABLE [Staging].[Sales_Incoming]
-SWITCH TO [Fact].[Sales] PARTITION $PARTITION.[PF_Fact_ByYear](20240101);
+SWITCH TO [Fact].[Sales] PARTITION $PARTITION.[PF_Fact_ByYear]('2024-01-01');
 ```
 
 > **Pre-requisite:** Both tables must have matching indexes, CHECK constraints on the

@@ -23,7 +23,7 @@ Data Warehouse Review Checklist — On-Premises SQL Server / SSAS Tabular
 |---|---|---|
 | All fact tables have a surrogate integer PK | 🟡 | |
 | FK to all dimensions defined (trusted constraints at minimum) | 🟡 | |
-| Date dimension FK is NOT NULL | 🔴 | NULL date keys break time intelligence |
+| Date dimension FK is NOT NULL | 🔴 | Use sentinel `'1753-01-01'` instead of NULL — ELT must ISNULL on LEFT JOIN Calendar |
 | No varchar/nvarchar measure columns (must be numeric) | 🔴 | Implicit conversion overhead in SSAS |
 | Fact table grain documented | 🔴 | Undefined grain leads to incorrect aggregations |
 | Late-arriving facts handling documented | 🟡 | |
@@ -44,13 +44,14 @@ GROUP BY s.name, t.name ORDER BY EstRows DESC;
 | Check | Sev | Notes |
 |---|---|---|
 | All dimensions have surrogate integer PK | 🔴 | Natural keys cause SSAS relationship overhead |
-| Unknown/default member row exists (key = -1 or 0) | 🟡 | |
+| Unknown/default member row exists (`{EntityName}Key = -1`; DATE dims use `'1753-01-01'`) | 🟡 | Single sentinel per SQLBI simplification — no -2/-3 variants |
 | SCD Type 2 dims have IsCurrent, EffectiveFrom, EffectiveTo | 🟡 | |
 | Conformed dimensions shared across fact tables (bus matrix) | 🔴 | Siloed dims prevent cross-subject-area analysis |
 | Dimension attributes have human-readable labels | 🟡 | |
-| [Dimension].[Calendar] covers min(fact date) − 5yr to today + 3yr | 🔴 | Gaps break time intelligence |
-| [Dimension].[Calendar] marked as Date Table in SSAS | 🔴 | Required for DATESYTD, SAMEPERIODLASTYEAR, etc. |
-| [Dimension].[Calendar].[Date Key] is DATE type (not INT YYYYMMDD); [YYYYMMDD] INT available as separate column | 🟡 | |
+| [Dimension].[Calendar] covers min(fact date) − 5yr to today + 3yr (excluding sentinels) | 🔴 | Gaps break time intelligence; run contiguity check from `dw-calendar-build.md §5` |
+| [Dimension].[Calendar] marked as Date Table in SSAS; `[Date Key]` selected as date column | 🔴 | Required for DATESYTD, SAMEPERIODLASTYEAR, etc. |
+| [Dimension].[Calendar].[Date Key] is DATE type (not INT YYYYMMDD); [YYYYMMDD] INT available as separate column | 🔴 | |
+| [Dimension].[Calendar] sentinel rows `'1753-01-01'` / `'9999-12-31'` exist in SQL table; SSAS.v_Calendar filters them out | 🔴 | SQL FK integrity + SSAS contiguity both required |
 | [Dimension].[Calendar] FiscalYear/Quarter/Month populated if non-calendar FY used | 🟡 | |
 | Large dimensions (>1M rows) reviewed for SSAS memory impact | 🟡 | |
 
