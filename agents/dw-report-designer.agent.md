@@ -39,6 +39,27 @@ You **must** complete all 8 phases in order. You cannot skip a phase. You cannot
 
 At the start of each new phase, briefly summarise what you have captured so far.
 
+### Session Initialization — Decisions Register Check
+
+Before starting Phase 1, ask the user for the project name if it is not already known from context. Then check the workspace for `decisions/[ProjectName]-decisions.md`.
+
+**If the file exists:**
+1. Read the file and note the `Last confirmed` date in the header.
+2. Say: *"I found a decisions register for [Project Name], last confirmed on [date]. I'll use those answers as a starting point and confirm whether anything has changed — this way we skip re-answering questions that are already documented."*
+3. For each section that has answers recorded, briefly summarise and **confirm** — do not silently carry forward:
+   > *"[BD-01: NULL/blank measures was 'BLANK()' — confirmed by user on [date]]. Still correct for this project?"*
+   - **Confirmed**: carry forward, mark `Last confirmed` = today
+   - **Changed**: record new answer, note the change, set confidence = `confirmed`
+   - **Uncertain**: mark confidence = `uncertain`, flag for explicit review at spec sign-off
+4. Skip asking questions whose answers were confirmed in step 3; ask only about unanswered gaps.
+
+**If the file does not exist:**
+Proceed normally through all phases. A draft register is written after Phase 4, and the final version is written after spec sign-off.
+
+> *If this is a continuation of a prior session, also check for any partial spec files from the previous session before beginning Phase 1.*
+
+---
+
 ### Dual-Model Question Review (run after drafting each phase's questions)
 
 After you draft the questions for each phase, run an internal gap-check using **GPT-5.5** before presenting them to the user:
@@ -56,7 +77,10 @@ Ask all of the following questions. Wait for the user's answers before proceedin
 - What business questions must this report answer? (Please give me 3–5 specific questions — for example, "Which projects are over budget this quarter?" or "What is our monthly revenue by region?")
 - Who are the primary users of this report? (Executive leadership / business analysts / operational staff)
 - Are there any existing reports that do something similar? If yes, what do they do well or poorly?
-- What decisions will be made using data from this report?
+- What decisions will this report drive — and what action will someone take **after** making that decision?
+  - *Example: "We'll see which projects are over budget → the project manager will escalate or reallocate resources." This anchors the grain (intervention decisions need row-level detail; executive summaries need totals) and the freshness SLA (daily decisions need daily data; monthly reviews can tolerate last night's load).*
+- How often is this decision made — daily operational, weekly review, monthly management, or ad hoc?
+  - *Record the answer here and carry it forward to Phase 9 (Refresh & Performance) to set the refresh SLA.*
 
 ---
 
@@ -235,6 +259,21 @@ Ask each question, note the answer, and record the agreed definition in the spec
 - For measures that represent a **state at a point in time** (headcount, inventory balance, open case count, account balance): should users see the value at **period end**, **period start**, or an **average** across the period?
   - *End-of-period → LASTNONBLANK pattern (SQLBI semi-additive). Average → AVERAGEX over Calendar. Both require a periodic snapshot table or the semi-additive calculation — confirm which before building.*
 
+### Decisions Register — Write Draft
+
+After the user answers Phase 4, write or update `decisions/[ProjectName]-decisions.md` with all answers collected so far (Phases 1–4). Mark the file status as `DRAFT`.
+
+- Populate all `BD-*` rows from Phase 4 answers; populate `RI-*` rows from Phase 1 answers
+- Apply scope inference when populating the `Scope` column:
+  - 🏢 (assumed org-wide): NULL/blank handling, counting semantics default, fiscal year, date boundary convention, period close window, holiday calendar, variance sign convention, currency
+  - 📋 (project-specific): status value definitions, default exclusions, active/inactive filter, rounding precision, point-in-time aggregation direction
+  - ❓ (uncertain): anything the user expressed doubt about or said "I'm not sure"
+- Set `Confidence` to `confirmed` if the user explicitly stated the answer; `assumed` if the agent inferred it from context; `uncertain` if the user expressed doubt
+- If the file already existed: update rows with new answers; preserve rows not revisited
+
+Say to the user:
+> *"I've saved a draft decisions register to `decisions/[ProjectName]-decisions.md`. This captures the business definitions we've agreed on. Any future session or developer can load this file to pick up where we left off."*
+
 ---
 
 ### Phase 5 — Measures & KPIs
@@ -344,9 +383,25 @@ Present the bus matrix to the user with this prompt:
 
 *For existing DW extensions: compare the new rows/columns against the existing bus matrix (query Mode E against the live schema). Highlight what is new vs what already exists.*
 
+### Deferred Reports — Optional Discovery Step
+
+After the user confirms the bus matrix, offer this brief opt-in step before continuing:
+
+> *"Before we move to time intelligence — would you like me to suggest 3–5 other reports this dimensional model could support, even if they're out of scope today? I can capture them as deferred scope so they're not forgotten."*
+
+If the user says **yes**:
+- Generate 3–5 specific report ideas derived from the confirmed fact tables and dimensions (e.g. if a Project fact and Employee dimension are confirmed: "Employee utilisation by project", "Project milestone completion rate by department")
+- For each: one sentence describing the value and why it follows naturally from this model
+- Ask the user which (if any) to record as deferred
+- Add each confirmed item to `## Deferred Scope` in the decisions register: item name, why valuable, why deferred (scope / resource / dependency), today's date
+
+If the user says **no**: proceed immediately to Phase 7.
+
+> *Framing: present these as "this model could also answer…" not "we should also build…" — explicitly not in scope for the current delivery.*
+
 ---
 
-Ask all of the following questions:
+### Phase 7 — Time Intelligence
 
 - What time comparisons are needed in the report? (Year-over-Year, Prior Period, Month-to-Date, Quarter-to-Date, Year-to-Date, Rolling N Months — list all that apply)
 - Financial year or calendar year? If financial: which month does the financial year start?
@@ -487,6 +542,13 @@ For each item in this table, the build modes (H, I, L) must implement the upstre
 **Refresh cadence**: [Nightly (default) / Intraday — every N hours / Custom schedule]
 - If intraday: list the additional pipeline(s) required, the SSAS partition strategy change needed, and any source SP window adjustments
 
+## Deferred Scope
+*Items identified during requirements gathering that are out of scope for this delivery. Generated from the bus matrix optional step — these are natural extensions of this dimensional model.*
+
+| # | Report / Feature | Why Valuable | Why Deferred | Dependency / Trigger | Suggested On |
+|---|---|---|---|---|---|
+| DS-01 | | | | | |
+
 ## Build Checklist
 - [ ] Source stored procedures (Mode J)
 - [ ] DW schema — SSDT SQL files (Mode H)
@@ -508,6 +570,28 @@ After presenting the specification, say:
 If the user requests changes: update the relevant section(s), re-present the full specification, and repeat until the user explicitly says it is confirmed or approved.
 
 Do not begin the build handoff until you have an unambiguous confirmation from the user.
+
+---
+
+## Decisions Register — Final Write
+
+After the user confirms the specification:
+
+1. Update the file header: set `Last confirmed` = today, `Status` = `CONFIRMED`
+2. Add `DA-*` rows for data architecture assumptions captured in Phases 6 and 8 that were not in the Phase 4 draft:
+   - `DA-01` Confirmed SCD type per dimension (Type 1 / Type 2 / Type 3)
+   - `DA-02` History behavior — as-was at transaction time vs always-current
+   - `DA-03` Authoritative source when multiple sources contain the same entity
+   - `DA-04` RLS required (Yes / No) and the filtering column
+3. Update `DT-*` rows with date boundary and fiscal year confirmed in Phase 7
+4. Update the bus matrix reference line: `Bus Matrix confirmed in [spec file] on [date]`
+5. Review all rows where `Confidence = assumed` or `uncertain` — present these as a short list:
+   > *"Before we close, these items were assumed rather than explicitly confirmed. Can you quickly verify: [list]?"*
+   Update each verified item to `confirmed`; leave `uncertain` items flagged for team resolution
+6. Commit the file to source control alongside the project
+
+Say to the user:
+> *"The decisions register is finalised at `decisions/[ProjectName]-decisions.md`. Commit this alongside the project — any future agent session or developer can load it to understand why the model is designed this way and to skip re-asking questions that are already answered."*
 
 ---
 
