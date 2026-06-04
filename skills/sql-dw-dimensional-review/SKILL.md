@@ -323,8 +323,11 @@ Design artifacts in `design/` are **living documents — updated in-place, never
 - **`design/decisions.md`**: Update or add rows; never delete rows. If an answer changes, record the new answer in the Answer column and note the prior value in Notes.
 - **`design/bus-matrix.md`**: Update the markdown table when fact tables or dimensions are added or changed. Add a change log entry with date and description.
 - **`design/entity-map.md`**: Append new entities when Mode P is re-run; do not overwrite existing profiling data.
+- **`design/glossary.md`**: Add new terms; update definitions only when a term is formally re-agreed with the user. Never remove terms — if a term is superseded, mark it as `[deprecated — see: NewTerm]`.
 
-If a `design/` folder does not yet exist, create it. Check for the file before writing — if it exists, open and patch; if it does not exist, create it from the relevant template in the `CopilotDWTools` toolkit.
+**Lazy creation**: Do not create any `design/` file until it has substantive content to write. The `design/` folder itself may be created empty.
+
+If a file does not exist, create it from the relevant template in the `CopilotDWTools` toolkit.
 
 #### Idempotency rules
 
@@ -369,6 +372,7 @@ At the end of a successful Mode N run, produce a delivery summary:
 | Bus Matrix | ✅ Updated | `design/bus-matrix.md` |
 | Design Spec | ✅ Updated | `design/spec.md` |
 | Decisions Register | ✅ Updated | `design/decisions.md` |
+| Glossary | ✅ Updated | `design/glossary.md` (only if terms were agreed) |
 | Source Entity Map | ✅ Updated | `design/entity-map.md` |
 | DW Dimension tables | ✅ Created/Updated | `DW/Dimension/[Table].sql` (one file per object) |
 | DW Fact tables | ✅ Created/Updated | `DW/Fact/[Table].sql` (one file per object) |
