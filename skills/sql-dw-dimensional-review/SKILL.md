@@ -464,7 +464,7 @@ At the end of a successful Mode N run, produce a delivery summary:
 
 Applies to direct flat-file feeds **and** CSV header/sample exports from any other source system (Salesforce, Oracle, PostgreSQL, MySQL, etc.). See `references/source-system-analysis.md` § "CSV Source Discovery" for the full procedure.
 
-1. Profile each CSV using whichever tool is available: PowerShell `Import-Csv`, Python `pandas`, or bulk-load to SQL Server staging.
+1. Profile each CSV using the preferred tool for the row count: **PowerShell `Import-Csv`** for small-to-medium files (up to ~100k rows), or **SQL Server bulk-load to a Staging table** for larger files or when cross-file joins are needed. Python/pandas is not a default option in this Windows environment.
 2. Derive the same outputs as Q1–Q9 (table inventory, date/status columns, PK candidates, inferred FKs, NULL rates, cardinality, duplicate PK check, date range profiling).
 3. Q10 (CDC) is not applicable — ask the user whether the CSV represents a one-time load, an incremental drop, or a full snapshot per delivery; record the answer for Mode K.
 4. All FK relationships derived from CSV are **inferred** and go into the "Inferred Relationships (low confidence)" section of the entity map.

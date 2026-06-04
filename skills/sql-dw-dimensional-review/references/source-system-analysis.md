@@ -444,13 +444,25 @@ For each CSV file, derive the same information that Q1–Q9 produce for SQL Serv
 
 ### Tools
 
-Profile the CSV using whichever discovery tool is available in the session:
+Profile the CSV using one of these two preferred tools (this environment is Windows; Python is typically not installed):
 
-- **PowerShell** (always available in this environment): `Import-Csv` for parsing, `Group-Object` for cardinality and PK uniqueness, `Measure-Object` for row count and NULL rate
-- **Python** with `pandas` (if Python is available): `pd.read_csv` + `df.describe(include='all')` + `df.nunique()` + `df.isna().sum()`
-- **SQL Server** as a staging tool (if available): bulk-load the CSV into a `Staging` table and run the standard Q1–Q9 queries against it
+1. **PowerShell** (always available, preferred for small-to-medium CSVs up to ~100k rows): `Import-Csv` for parsing, `Group-Object` for cardinality and PK uniqueness, `Measure-Object` for row count and NULL rate. Example:
+   ```powershell
+   $rows = Import-Csv .\Customers.csv
+   $rows.Count                                        # row count
+   ($rows | Get-Member -MemberType NoteProperty).Name # column list
+   $rows | Group-Object CustomerID |
+       Where-Object Count -gt 1                       # duplicate PK check
+   $rows | Group-Object Status |
+       Select-Object Name, Count                      # cardinality / Q7 equivalent
+   ($rows | Where-Object { -not $_.Region }).Count /
+       $rows.Count                                    # NULL rate on Region
+   ```
+2. **SQL Server bulk-load** (preferred for large CSVs > ~100k rows, or when joining across multiple CSVs is needed): bulk-load each CSV into a `Staging` table on an available SQL Server instance, then run the standard Q1–Q9 queries against the staged tables. Use `BULK INSERT` or `OPENROWSET(BULK ...)` — both work without SSIS for ad-hoc discovery.
 
-Use the simplest available tool. Do not require a specific tool — adapt to what's in the session.
+> **Python / pandas is NOT a default option** in this environment — do not assume Python is installed. If a CSV is too large for PowerShell and no SQL Server instance is available for staging, ask the user before attempting any other tool.
+
+Use the simpler tool (PowerShell) first; fall back to SQL Server bulk-load only when row volume or cross-file joins require it.
 
 ### Output
 
