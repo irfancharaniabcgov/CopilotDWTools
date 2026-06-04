@@ -450,14 +450,23 @@ CALCULATE(
 
 ---
 
-## Month and Week Calculations (Custom / Fiscal Calendar)
+## Month and Week Calculations (Non-Standard Fiscal Calendar)
 
 **Source:** https://www.daxpatterns.com/month-related-calculations/ and https://www.daxpatterns.com/week-related-calculations/
-**Likelihood:** 🟡 Medium — required when org uses a fiscal calendar that differs from Gregorian
+**Likelihood:** 🟡 Medium — required only when the org uses a **non-standard fiscal calendar** (week-based, 4-4-5, 4-5-4, 5-4-4, 13-period, ISO-week, or any calendar that does not align to month-end boundaries)
 
-When using fiscal calendar, do NOT use DAX built-in time intelligence functions (`DATESYTD`, `SAMEPERIODLASTYEAR`, etc.) as they assume Gregorian calendar. Use filter-based alternatives.
+### When to use built-in DAX time intelligence vs. filter-based patterns
 
-### Fiscal YTD
+| Fiscal calendar type | Pattern to use |
+|---|---|
+| **Standard month-aligned fiscal year** (e.g. Apr 1 – Mar 31, Jul 1 – Jun 30, Oct 1 – Sep 30) | Use built-in `DATESYTD( 'Calendar'[Date Key], "MM-DD" )` with the fiscal year-end month/day. The org standard pattern for Apr 1 – Mar 31 is `DATESYTD( 'Calendar'[Date Key], "03-31" )`. See `sqlbi-dax-patterns.md` and `dax-style-guide.md`. |
+| **Week-based, 4-4-5, 4-5-4, 5-4-4, 13-period, or ISO-week fiscal calendar** | Built-in DAX time intelligence breaks for these because period boundaries do not align to month-end. Use the filter-based patterns below. |
+
+> **Org default (Apr 1 – Mar 31):** the standard `DATESYTD(..., "03-31")` pattern works correctly. Do not use the filter-based patterns in this section unless the project explicitly requires a non-standard calendar.
+
+The filter-based patterns below assume the org uses a non-standard fiscal calendar.
+
+### Fiscal YTD (non-standard calendar only)
 ```dax
 Fiscal YTD Sales =
 CALCULATE(
@@ -470,7 +479,7 @@ CALCULATE(
 )
 ```
 
-### Fiscal Prior Year
+### Fiscal Prior Year (non-standard calendar only)
 ```dax
 Fiscal Prior Year Sales =
 CALCULATE(

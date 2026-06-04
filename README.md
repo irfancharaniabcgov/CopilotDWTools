@@ -126,7 +126,7 @@ Modes H–N for artifact generation.
 ## How They Work Together
 
 ```
-User → dw-report-designer (interview, 8 phases)
+User → dw-report-designer (interview, 9 phases)
          ↓ grain gate confirmed
        ssas-tabular-dw-architect (source validation, schema inspection)
          ↓ spec signed off

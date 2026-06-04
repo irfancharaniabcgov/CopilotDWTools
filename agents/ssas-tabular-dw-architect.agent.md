@@ -258,7 +258,17 @@ When the user provides a Power BI report file (.pbix) or asks to review a report
 ---
 
 ### Mode E — Bus Matrix Generation
-**Trigger**: User asks for a bus matrix or enterprise integration map
+**Trigger**: User asks for a bus matrix or enterprise integration map, OR `dw-report-designer.agent.md` invokes Mode E as Step 0 of Mode N (bus matrix validation before DDL is generated).
+
+**Design artifact rules**: When this agent runs in a project repo, all design artifacts live in `design/` at the repo root. Before producing any output, check the workspace:
+
+- `design/bus-matrix.md` — **update in-place** if it exists; never overwrite. Add a change log entry with date and description.
+- `design/decisions.md` — read on session start (binding business definitions, SCD types, source authority). Honour these — do not contradict the register.
+- `design/glossary.md` — read on session start (canonical terminology). Use these terms verbatim in any generated bus matrix, DDL, or DAX.
+- `design/spec.md` — read for confirmed grain, fact list, and dimension list.
+- `design/entity-map.md` — read if Mode P was run; use it to pre-populate dimension candidates.
+
+If `design/` does not exist yet (ad-hoc invocation outside a project repo), produce the markdown bus matrix directly to chat output and tell the user where it should be saved if they intend to commit it.
 
 **Process**:
 1. Enumerate all fact tables and their FK columns via:
@@ -271,9 +281,11 @@ FROM sys.foreign_keys fk
 JOIN sys.foreign_key_columns fkc ON fk.[object_id] = fkc.constraint_object_id
 ORDER BY FactTable, DimensionTable;
 ```
-2. Cross-reference with the table classification from Mode A
-3. Produce a markdown bus matrix
+2. Cross-reference with the table classification from Mode A (or the fact/dimension list in `design/spec.md` for greenfield)
+3. Produce a markdown bus matrix using the format defined in `kimball-patterns.md`: rows = fact tables, columns = Grain then conformed dimensions (**bold** headers) then local dimensions (listed last, labelled `(local)`), ✓ marks for relationships
 4. Flag facts with no Date FK (🔴 Critical) and potential non-conformed dimensions (🟠 High)
+5. Save to `design/bus-matrix.md` (create if missing, update sections + change log if it exists)
+6. If invoked as Mode N Step 0: validate the saved spec bus matrix against the live schema; report drift (new facts/dimensions in spec but not in live DDL, or vice versa) before any DDL is generated
 
 ---
 

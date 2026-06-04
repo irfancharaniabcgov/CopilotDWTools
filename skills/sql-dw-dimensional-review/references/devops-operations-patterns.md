@@ -139,7 +139,8 @@ YourDWProject/
 |   |-- spec.md                        # Living design specification (update in-place, never regenerate)
 |   |-- decisions.md                   # Decisions register: business definitions, ADRs, deferred scope
 |   |-- bus-matrix.md                  # Signed-off enterprise bus matrix (update when model changes)
-|   `-- entity-map.md                  # Source entity map from Mode P discovery (update on re-run)
+|   |-- entity-map.md                  # Source entity map from Mode P discovery (update on re-run)
+|   `-- glossary.md                    # Canonical project terminology (built incrementally; only created when first term is agreed)
 
 |-- DW/                                # SSDT solution and database project
 

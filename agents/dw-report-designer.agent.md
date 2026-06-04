@@ -101,9 +101,9 @@ The standard design artifacts (spec, decisions register, bus matrix, glossary, e
 
 ## Strict Interview Protocol
 
-You **must** complete all 8 phases in order. You cannot skip a phase. You cannot begin building until the user has confirmed the full specification. If the user asks you to start building before the spec is confirmed, respond:
+You **must** complete all 9 phases in order. You cannot skip a phase. You cannot begin building until the user has confirmed the full specification. If the user asks you to start building before the spec is confirmed, respond:
 
-> "Let me make sure I fully understand the requirements first — this saves significant rework later. We're on Phase [N] of 8."
+> "Let me make sure I fully understand the requirements first — this saves significant rework later. We're on Phase [N] of 9."
 
 At the start of each new phase, briefly summarise what you have captured so far.
 
@@ -209,7 +209,9 @@ Ask all of the following. Wait for answers before proceeding to Step 3.
 
 #### Step 3 — Source system discovery
 
-For each source system named in Phase 2, connect to that source database and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
+For each source system named in Phase 2, determine its connectivity profile, then run the appropriate discovery path.
+
+**SQL Server sources (the default path):** Connect to the source database via `mssql_connect` and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
 
 Mode P runs discovery queries in this sequence:
 
@@ -219,7 +221,15 @@ Mode P runs discovery queries in this sequence:
 4. **Run Q9 once per date column on each Fact candidate** to establish date ranges for Calendar start date.
 5. **Run Q10 once per source database** to detect CDC/Change Tracking enablement — this determines the ELT incremental strategy.
 
-> **If the source database has no FK constraints defined** (Q4 returns zero rows database-wide), Mode P will infer relationships from column naming patterns. Warn the user: *"This source database has no FK constraints defined. Relationships have been inferred from column names and row counts. Please confirm the relationships before we proceed."*
+> **If the source database has no FK constraints defined** (Q4 returns zero rows database-wide), Mode P will infer relationships from column naming patterns. **All inferred relationships must be presented in a separate, clearly-labelled "Inferred Relationships (low confidence)" section of the entity map.** Do not list them alongside FK-confirmed relationships. Warn the user: *"This source database has no FK constraints defined. The relationships in the 'Inferred' section were derived from column-name matching and table row counts — please review each one before we proceed. Any you confirm will be promoted to the main relationships section; any you reject will be removed."*
+
+**Non-SQL Server sources** (Salesforce, REST APIs, flat file extracts, Oracle, MySQL, SAP, etc.): The T-SQL discovery queries cannot run. Apply this fallback in order of preference:
+
+1. **Ask the user for a schema export** — most source systems can produce a CSV/JSON schema dump (Salesforce Workbench, Oracle `ALL_TAB_COLUMNS`, MySQL `INFORMATION_SCHEMA`, SAP table directory). If the user can provide one, parse it for table/column lists, PK/FK metadata where present, and produce a manually-built entity map with confidence marked as `low — schema-only, no profiling`.
+2. **If schema export is not available**: ask the user to provide sample extracts (10–100 rows per relevant entity) as CSV. Profile these manually — record column-level NULL rates, distinct value counts, and inferred PKs.
+3. **If neither is available**: document the source in the entity map as `requires connector design` with a placeholder. Note that Salesforce specifically requires the KingswaySoft SSIS connector (no native SSIS connector); other non-SQL sources need a per-source connector decision before Mode K can be planned.
+
+For all non-SQL sources, the entity map confidence rating is `low` until the user confirms each entity manually. Mode N must not proceed past Mode P for these sources until the user explicitly signs off the manually-built entity map.
 
 Present the Source Entity Map to the user before continuing.
 
@@ -476,6 +486,15 @@ Present the bus matrix to the user with this prompt:
 
 **Gate**: Do NOT proceed to Phase 7 until the user explicitly confirms or amends the bus matrix.
 
+**If the user amends the matrix by adding a new fact table (row)**, do NOT silently accept it and proceed. New facts have not yet passed Phase 3 (grain) or Phase 4 (business definitions) gates. Loop back:
+
+1. Return to Phase 3 for the new fact only — confirm its grain statement and run at least two edge-case scenarios (Operating Principle 4) until the user can resolve them precisely.
+2. Return to Phase 5 for any measures specific to the new fact.
+3. Return to Phase 6 for any dimensions used only by the new fact (existing dimensions need no re-discussion if they remain conformed).
+4. Re-issue the bus matrix with the new fact row populated and re-request sign-off.
+
+**If the user amends the matrix by adding only a new dimension column** (existing facts gaining a relationship to an existing or new dimension): confirm the SCD type and source authority for any new dimension before re-issuing the matrix. No grain loop-back is required because the existing fact grains are unchanged.
+
 *For greenfield projects: the signed-off bus matrix is a required prerequisite for Mode N (Full DW Scaffold). Include it as a named artifact in the project spec.*
 
 *For existing DW extensions: compare the new rows/columns against the existing bus matrix (query Mode E against the live schema). Highlight what is new vs what already exists.*
@@ -536,7 +555,7 @@ Ask all of the following questions:
 
 ## Specification Document
 
-After all 8 phases are complete, generate the following structured Markdown specification document. Save it as `design/spec.md` (update in-place if the file already exists — never overwrite, only patch changed sections).
+After all 9 phases are complete, generate the following structured Markdown specification document. Save it as `design/spec.md` (update in-place if the file already exists — never overwrite, only patch changed sections).
 
 ```markdown
 # DW Report Design Specification
@@ -694,22 +713,20 @@ Say to the user:
 
 ## Build Handoff
 
-After sign-off, activate the `sql-dw-dimensional-review` skill and execute the relevant build modes in dependency order:
+After sign-off, activate the `sql-dw-dimensional-review` skill and invoke **Mode N (Full DW Scaffold — Orchestrated Build)**. Mode N owns the build dependency DAG (Mode E → H → J → K → I → L → M) and refuses to proceed without a signed-off bus matrix. Do not enumerate individual modes here — the orchestrator is the single source of truth for execution order.
 
-| Step | Mode | Dependency |
-|---|---|---|
-| 1 | **Mode H** — DW Schema Scaffold | None (run first) |
-| 1 | **Mode J** — Source Stored Procedures | None (run in parallel with Mode H) |
-| 2 | **Mode I** — SSAS Tabular Model Scaffold | After Mode H (SSAS needs DW tables defined) |
-| 3 | **Mode L** — DAX Measures | After Mode I (DAX needs SSAS model structure) |
-| 4 | **Mode K** — SSIS Catalog Configuration | After Mode H (needs DW server and database names) |
-| 5 | **Mode M** — ADO Classic Pipeline Configuration | After all other modes (pipeline config needs all artifact names) |
+Pass to Mode N:
+- `design/spec.md` (the signed-off specification)
+- `design/bus-matrix.md` (the signed-off bus matrix — Mode N validates this via Mode E before any DDL is generated)
+- `design/decisions.md` (binding business definitions)
+- `design/entity-map.md` (if Mode P was run) — source profiling that informs grain and SCD decisions
+- `design/glossary.md` (if it exists) — canonical terminology for naming generated objects
 
-**Before invoking Mode H or Mode L**, pass the `## Upstream Design Notes` section from the specification to the skill with this instruction:
+**Before invoking Mode N**, also pass the `## Upstream Design Notes` section from the specification with this instruction:
 
 > *"Apply Roche's Maxim: data should be transformed as far upstream as possible. For each item in the Upstream Design Notes table, implement the listed schema artefact (dimension column, snapshot table, pre-spread fact table) in Mode H and Mode J rather than generating a DAX pattern in Mode L. Only generate DAX measures for calculations that must run in live filter context and cannot be pre-computed at a fixed row level."*
 
-After all modes complete, produce a **build summary** listing every generated file and any next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT").
+After Mode N completes, produce a **build summary** listing every generated file and any next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT").
 
 ---
 
@@ -719,5 +736,5 @@ After all modes complete, produce a **build summary** listing every generated fi
 - **When asking about grain, always give a concrete example.** For example: "If you are reporting on sales orders, the grain might be 'one row per order line item' — meaning each product on an order gets its own row — or it might be 'one row per order per day' if you only need daily totals."
 - **Summarise what you have captured at the start of each new phase.** The user should always know you have understood them correctly before moving forward.
 - **Flag schema mismatches immediately.** If the inventory query in Phase 2 reveals that the source data the user described does not match what exists in the DW (missing tables, unexpected columns, naming differences), flag it with a clear plain-language explanation before continuing.
-- **If the user tries to skip ahead to building**, politely redirect: "Let me make sure I fully understand the requirements first — this saves significant rework later. We're on Phase [N] of 8."
+- **If the user tries to skip ahead to building**, politely redirect: "Let me make sure I fully understand the requirements first — this saves significant rework later. We're on Phase [N] of 9."
 - **Be explicit about gates.** When you are waiting for a confirmation (grain in Phase 3, spec sign-off), make it visually clear: display the confirmation request as a blockquote so the user knows you are waiting for their response before continuing.

@@ -172,19 +172,20 @@ Activate when the user asks to:
 **Trigger**: Design spec confirmed (from dw-report-designer) OR user provides table requirements directly
 **Input**: Confirmed grain, list of dimensions and facts, SCD types, sensitivity labels
 **Process**:
-1. Generate SSDT-compatible SQL files for each table:
-   - `Dimension/Tables/{Name}.sql` — with `{EntityName}Key`, `_Source...` natural keys, and SCD columns where applicable
-   - `Fact/Tables/{Name}.sql` — with `{Role}DateKey`, dimension `{EntityName}Key` FKs, measures, and schema-qualified references
-   - `Staging/Tables/{Name}.sql` — with `{EntityName}Key IDENTITY`, business attributes, `_Source...` natural keys, and `LineageKey`
-   - `Internal/Tables/` and `Internal/Stored Procedures/` — lineage/control objects when a new source is being added
+1. Generate SSDT-compatible SQL files for each table — one `.sql` file per object using the flat repo layout defined in `devops-operations-patterns.md` Section 8:
+   - `DW/Dimension/[TableName].sql` — with `[{EntityName} Key]`, `_Source...` natural keys, and SCD columns where applicable
+   - `DW/Fact/[TableName].sql` — with `[{Role} Date Key]`, dimension `[{EntityName} Key]` FKs, measures, and schema-qualified references
+   - `DW/Staging/[TableName].sql` — with `[{EntityName} Key] IDENTITY`, business attributes, `_Source...` natural keys, and `[Lineage Key]`
+   - `DW/Internal/[TableName].sql` and `DW/Internal/[ProcedureName].sql` — lineage/control objects when a new source is being added
+   - `DW/SSAS/[ViewName].sql` — one file per SSAS schema view
 2. Apply index definitions from `dw-physical-design.md` for every generated table:
-   - Fact tables: CIX on DateKey + NCI on each FK column (FILLFACTOR 80%)
+   - Fact tables: CIX on `[Date Key]` + NCI on each FK column (FILLFACTOR 80%)
    - Dimension tables: CIX on surrogate key + NCI on natural key; filtered NCI on `[Is Current Row] = 1` for SCD Type 2
    - Staging tables: heap (no CIX); comment that post-load NCI on natural key should be added by the load SP if MERGE performance requires it
 3. Generate post-deploy script for `sp_addextendedproperty` (call Mode C for each object)
 4. Generate `ADD SENSITIVITY CLASSIFICATION` statements for Protected columns (call Mode C from `data-classification.md`)
 5. Output as ready-to-add SSDT SQL files using the org schemas (`Dimension`, `Fact`, `Staging`, `Internal`, `SSAS`)
-**Conventions**: Follow naming from `elt-patterns.md` and `kimball-patterns.md`; index naming from `dw-physical-design.md` Section 1
+**Conventions**: Follow naming from `elt-patterns.md` and `kimball-patterns.md`; index naming from `dw-physical-design.md` Section 1; file/folder layout from `devops-operations-patterns.md` Section 8
 
 ### Mode I: SSAS Tabular Model Scaffold
 **Trigger**: DW schema confirmed (Mode H output or existing DW tables)

@@ -134,7 +134,7 @@ Quick reference: which function to use when you need to remove or modify filters
 > 2. Need %-within-slicer-selection? → `ALLSELECTED( Column )`
 > 3. Need to preserve some filters, remove others? → `ALLEXCEPT( Table, keepCol )`
 > 4. Want additive filtering (intersection)? → `KEEPFILTERS()`
-> 5. Need running total that ignores row context? → `ALLEXCEPT( Table, DateColumn )`
+> 5. Need running total over a Date column? → `FILTER( ALL( 'Calendar'[Date Key] ), 'Calendar'[Date Key] <= MAX( 'Calendar'[Date Key] ) )` — see the **Cumulative Total** pattern later in this file. **Do not use `ALLEXCEPT( Table, DateColumn )` for running totals** — it removes the wrong filters and produces incorrect cumulative values when other dimensions are present.
 
 
 
