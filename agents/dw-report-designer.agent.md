@@ -68,13 +68,67 @@ Ask all of the following questions. Wait for the user's answers before proceedin
 - Is any of this data already in the data warehouse? If yes, which tables?
 - Are there any known data quality issues in the source data? (Nulls in key columns, duplicate records, inconsistent codes, etc.)
 
-**After the user answers Phase 2**, query the connected SQL Server instance to inventory:
+**After the user answers Phase 2**, perform these four steps in order before continuing to Phase 3.
+
+#### Step 1 — Inventory the target DW
+
+Connect to the target DW server and run all three queries:
 
 1. Existing DW tables — `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA IN ('Dimension', 'Fact', 'Staging', 'Internal', 'SSAS') ORDER BY TABLE_SCHEMA, TABLE_NAME`
-2. Existing SSAS Tabular model tables (via DMV `SELECT * FROM $SYSTEM.TMSCHEMA_TABLES` if a live AS connection is available, or by locating `.bim` / TMDL files in the workspace)
+2. Existing SSAS Tabular model tables — via DMV `SELECT * FROM $SYSTEM.TMSCHEMA_TABLES` if a live AS connection is available, or by locating `.bim` / TMDL files in the workspace
 3. Existing DW load stored procedures — `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA IN ('Staging','Dimension','Fact','Internal') AND ROUTINE_NAME LIKE 'Load%' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`
 
-Report back what was found in a brief summary before continuing to Phase 3. Flag any gaps between what the user described and what exists in the DW.
+#### Step 2 — Greenfield check
+
+**If Step 1 finds no Dimension or Fact schema tables** (i.e., the DW query returns zero rows, or all returned tables are in `Staging` or `Internal` schemas only), activate the Greenfield Protocol:
+
+> "I found no Dimension or Fact tables at [server].[database]. This appears to be a new subject area. Before we continue, I need to confirm a few infrastructure questions."
+
+Ask all of the following. Wait for answers before proceeding to Step 3.
+
+- Does the target DW database already exist as an empty database, or does it need to be created as part of this project?
+- Is there an existing `[Dimension].[Calendar]` table available — either in this database or in a shared database accessible from this server? If yes, provide the server and database name. If no, a Calendar dimension will be built from scratch as part of this project (using the standard build from `references/dw-calendar-build.md`).
+- Does an SSISDB catalog already exist on the target SSIS server? (This affects SSIS project deployment configuration.)
+- Are there existing ADO Server pipeline definitions for this project area, or will this be the first pipeline?
+- What edition of SQL Server is the DW running on? (Standard vs Enterprise — this gates Columnstore indexes, online index operations, and partitioning used later in the build.)
+- What is the earliest date the reports need to cover? (This drives the Calendar dimension start date and determines whether a historical backfill load is required.)
+- What schema naming convention should new tables follow? (e.g. `Dimension.`/`Fact.`/`Staging.` vs `dim.`/`fact.`/`stg.` — the build DDL uses this convention throughout.)
+
+*Record these answers. They affect Mode H (Calendar DDL inclusion), Mode K (SSISDB config), Mode M (pipeline scaffolding), and all generated DDL in the build handoff.*
+
+**If Step 1 finds Dimension or Fact schema tables**, skip this step — the project is an extension of an existing DW.
+
+#### Step 3 — Source system discovery
+
+For each source system named in Phase 2, connect to that source database and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
+
+Mode P runs discovery queries in this sequence:
+
+1. **Q1–Q5 run once across the full source database** — table inventory, date/status column detection, PK map, FK relationship map, FK count summary — and applies classification heuristics to produce a **Source Entity Map**.
+2. **For each identified Fact candidate**, run Q6 (NULL Rate Check on FK/key columns) and Q8 (Duplicate PK check on the candidate natural key).
+3. **For each Status/Type column flagged in Q2**, run Q7 (Cardinality Profiling) — but review Q2 output first; column-name patterns produce false positives that must be triaged before running Q7.
+4. **Run Q9 once per date column on each Fact candidate** to establish date ranges for Calendar start date.
+5. **Run Q10 once per source database** to detect CDC/Change Tracking enablement — this determines the ELT incremental strategy.
+
+> **If the source database has no FK constraints defined** (Q4 returns zero rows database-wide), Mode P will infer relationships from column naming patterns. Warn the user: *"This source database has no FK constraints defined. Relationships have been inferred from column names and row counts. Please confirm the relationships before we proceed."*
+
+Present the Source Entity Map to the user before continuing.
+
+#### Step 4 — Gap report
+
+Produce a brief summary covering:
+
+- DW tables that already exist and will be reused without change
+- Source entities that need new DW tables (Fact and Dimension candidates with no matching existing DW table)
+- Source entities partially represented in the DW (may need new columns or a new fact table)
+- Data quality signals found during discovery (high NULL rates on apparent FK columns, unexpected date ranges)
+
+Flag mismatches between what the user described and what the discovery found, in plain language.
+
+**These results feed directly into subsequent phases:**
+- **Phase 3 (Grain)** — Fact candidates and their row counts anchor the grain discussion; pre-populate the grain proposal from the Source Entity Map
+- **Phase 4 (Measures)** — Numeric columns from Q6/Q9 profiling seed the additive/semi-additive/non-additive measure candidate list; do not ask the user to list measures from scratch if numeric columns are already identified
+- **Phase 5 (Dimensions)** — Dimension candidates from the Source Entity Map prime the SCD and hierarchy questions; do not ask the user to list dimensions from scratch if they were already identified here
 
 ---
 

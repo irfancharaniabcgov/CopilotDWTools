@@ -50,6 +50,9 @@ Activate when the user asks to:
 - Identify SCD type candidates from a schema
 - Audit dimension tables for grain, conformity, or SCD infrastructure
 - Check a Tabular model for missing descriptions, bad relationships, or performance issues
+- Analyse a source database to identify fact/dimension candidates before DW design begins
+- Design a new DW subject area where data exists in source systems but not yet in the DW
+- Scaffold a new line-of-business DW from a confirmed design specification
 
 ## Reference Files
 
@@ -78,6 +81,7 @@ Activate when the user asks to:
 | `references/security-implementation.md` | PBIRS→SSAS→DW connection chain, SQL least-privilege grants, SSAS Tabular roles (fixed + TREATAS dynamic RLS), OLS, PBIRS folder permissions |
 | `references/pbirs-constraints.md` | PBIRS feature constraints vs cloud PBI, Kerberos KCD setup, live connection limits, REST API deployment, performance tuning |
 | `references/pbix-report-standards.md` | Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
+| `references/source-system-analysis.md` | Mode P source discovery: T-SQL query library (Q1–Q10: table inventory, date/status column detection, PK/FK map, NULL rate checks, duplicate PK check, date range profiling, CDC/CT detection, cardinality profiling), classification heuristics (fact/dim/bridge/ignore with zero-row fallback and Priority 4/5 clarification), Source Entity Map output format, grain proposal pattern |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment |
 
 ## Operating Modes
@@ -388,7 +392,50 @@ At the end of a successful Mode N run, produce a delivery summary:
 6. Produce findings report using severity codes
 7. Optionally generate remediation scripts (idempotent `CREATE INDEX … IF NOT EXISTS` pattern) for all flagged items
 
-## Output Standards
+---
+
+### Mode P: Source System Analysis
+
+**Trigger:** User says "explore source", "analyse source database", "my data is in [SourceDB]", "I want to build a DW for [subject area]", or invokes Mode P explicitly. Also activated by `dw-report-designer` Phase 2 Step 3 for each source system named by the user.
+
+**Input:** Source server name + source database name. Optionally: a comma-separated list of table names to focus on (use when the database is large and only a subset is relevant to the subject area).
+
+**Process:**
+
+1. Connect to the source database using the `ms-mssql.mssql` MCP tool.
+2. Run **Q1–Q5 once across the full source database** (or filtered table list if supplied):
+   - **Q1** — Table Inventory with row counts and column counts
+   - **Q2** — Date/status column detection *(triage output before feeding Q7 — name patterns produce false positives)*
+   - **Q3** — Primary Key Map *(flag `uniqueidentifier` PKs as alternate-key candidates; generate INT surrogate in DW)*
+   - **Q4** — FK Relationship Map *(if zero rows returned database-wide, activate No FK Constraints handling)*
+   - **Q5** — Inbound/Outbound FK Count Summary
+3. Apply the classification heuristics from `references/source-system-analysis.md` to classify each table.
+4. **For each Fact candidate**, run:
+   - **Q6** — NULL Rate Check on FK and key columns *(for tables > 10M rows, restrict to FK and date columns only)*
+   - **Q8** — Duplicate PK Check on the candidate natural key *(duplicates = data quality issue; flag for ELT deduplication)*
+5. **For each Status/Type column flagged in Q2** (after human triage), run **Q7** — Cardinality Profiling. Fewer than 20 distinct values → junk dimension candidate.
+6. **For each date column on each Fact candidate**, run **Q9** — Date Range Profiling. Record `MIN`/`MAX` dates — these drive Calendar dimension start date for Mode H.
+7. Run **Q10** — CDC/Change Tracking Detection once per source database. Record result; this drives the ELT incremental strategy for Mode K and Mode M.
+8. Produce the **Source Entity Map** using the output format in `references/source-system-analysis.md`.
+9. For each Fact candidate, propose a grain: *"Based on `[Table]`, a natural grain is: one row per [PK description]. Does this match your reporting requirement?"*
+
+**No FK constraints:** When Q4 returns zero rows database-wide, apply implied FK detection — columns in high-row-count tables named `[EntityName]ID` / `[EntityName]Key` / `[EntityName]Code` whose names match PK column names in lower-row-count tables. Present these as *inferred* relationships in a separate section of the entity map, clearly labelled. Warn the user that these must be confirmed.
+
+**Output:** Structured Source Entity Map document containing:
+- Fact candidates (rows, date columns, FK columns, grain proposal)
+- Dimension candidates (rows, natural key, SCD potential)
+- Reference/lookup tables and junk dimension candidates
+- Source Change Detection summary (CDC/CT status from Q10)
+- Inferred relationships (if no FK constraints)
+- Ignored tables (with reason)
+- Data quality flags (NULL rates from Q6, duplicate PK issues from Q8)
+- Date range summary per Fact candidate (from Q9)
+
+**Consumer:** Phase 2 of `dw-report-designer.agent.md` calls this mode for each named source system. The entity map feeds Phase 3 (grain confirmation), Phase 4 (measure candidates from numeric columns), and Phase 5 (dimension design) — do not repeat discovery questions already answered in the entity map.
+
+**Reference:** `references/source-system-analysis.md` for all query text, classification heuristics, and output format.
+
+
 
 - Always produce a **severity-coded findings report** (🔴 Critical / 🟠 High / 🟡 Medium / 🔵 Low) using the template in `dw-review-checklist.md`
 - Always cite the specific Kimball pattern, SQLBI pattern, or checklist item for each finding
