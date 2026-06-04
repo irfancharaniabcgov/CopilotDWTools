@@ -129,13 +129,20 @@ Activate when the user asks to:
 4. Suggest corrected or improved version with explanation
 
 ### Mode E: Bus Matrix Generation
-**Input**: DW schema (live connection or DDL)
+**Trigger**: User asks for a bus matrix or enterprise integration map. Also automatically invoked by `dw-report-designer.agent.md` after Phase 6 (Dimensions) sign-off — the agent synthesises the bus matrix from interview answers rather than querying a live schema; Mode E's SQL query is used when augmenting against an existing DW.
+
+**Input (design-time)**: Confirmed fact tables + grains (Phase 3) and confirmed dimensions (Phase 6) from the `dw-report-designer` spec.  
+**Input (existing DW)**: Live SQL Server connection.
+
 **Process**:
-1. Enumerate all fact tables and their FK columns
+1. Enumerate all fact tables and their FK columns (from Phase 6 or live schema query)
 2. Map FK columns to their target dimension tables
-3. Produce markdown bus matrix table
-4. Flag missing expected dimensions (e.g., fact table with no Date FK)
-5. Flag potential non-conformed dimensions
+3. Produce markdown bus matrix table — format from `references/kimball-patterns.md §Enterprise Bus Matrix`:
+   - Rows = fact tables; Columns = Grain then dimensions (conformed dimensions first, **bold**; local dimensions last, labelled)
+   - ✓ where FK exists; blank where it does not
+4. Flag facts with no Calendar FK — 🔴 Critical
+5. Flag potential non-conformed dimensions (dimension used by only one fact — confirm whether it should be conformed) — 🟠 High
+6. For greenfield: present bus matrix to user for sign-off before any DDL is generated
 
 ### Mode F: ELT Pipeline Review
 **Input**: SSIS package design description, source SP code, staging schema, or transform SP code
@@ -260,7 +267,7 @@ Activate when the user asks to:
 
 **Trigger:** User says "build everything for [project name]", "full build", or invokes Mode N explicitly. Also activated by a signed-off spec from `dw-report-designer.agent.md`.
 
-**Prerequisites:** The `dw-report-designer.agent.md` interview protocol must be completed first. The agent will have produced a requirements artifact containing: confirmed grain, confirmed dimensions, confirmed measures, report layout, and user sign-off. **Mode N must refuse to proceed without this artifact.**
+**Prerequisites:** The `dw-report-designer.agent.md` interview protocol must be completed first. The agent will have produced a requirements artifact containing: confirmed grain, confirmed dimensions, confirmed measures, confirmed bus matrix (signed off), report layout, and user sign-off. **Mode N must refuse to proceed without a signed-off bus matrix.**
 
 **Input:** Complete design specification document from the interview protocol.
 
@@ -269,6 +276,9 @@ Activate when the user asks to:
 Mode N executes build modes in this order. Each step must complete and be validated before the next starts. (Mode-letter mapping reflects this skill's actual modes: H=DW Schema, J=Source SPs, K=SSIS Catalog, I=SSAS Tabular, L=DAX, M=ADO Pipeline.)
 
 ```
+0. Mode E  — Bus Matrix Validation (verify bus matrix from spec against live schema if DW exists;
+              confirm conformed dimensions; flag any ✓ gaps before DDL is generated)
+               ↓ (produces: validated/updated Bus Matrix markdown artifact)
 1. Mode H  — DW Schema Scaffold (Dimension/Fact/Staging/Internal tables)
               ↓ (produces: DW + Staging CREATE TABLE scripts, SSAS schema views)
 2. Mode J  — Source Stored Procedure Generation
@@ -291,6 +301,7 @@ Each mode produces a named artifact that the next mode consumes:
 
 | Producer | Artifact | Consumer |
 |---|---|---|
+| Mode E | `{Project}_BusMatrix.md` (signed-off bus matrix) | Mode H (table list + FK structure), Mode I (dimension relationships) |
 | Mode H | `{Project}_DW_Schema.sql` (Dimension + Fact + Staging tables) | Mode J (SPs reference these tables) |
 | Mode H | `{Project}_SSAS_Views.sql` (in `SSAS` schema) | Mode I (partition source view names) |
 | Mode H | `{Project}_Staging_Schema.sql` | Mode J (SPs load staging entities) |

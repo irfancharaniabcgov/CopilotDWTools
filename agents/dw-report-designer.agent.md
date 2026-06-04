@@ -302,7 +302,49 @@ Ask all of the following questions:
 
 ---
 
-### Phase 7 — Time Intelligence
+### Bus Matrix — Mandatory Gated Artifact
+
+> *This step is not a phase — it is a synthesis gate that runs automatically after Phase 6 is complete. The bus matrix must be produced and signed off before Phase 7 begins. For greenfield projects this is a hard gate; do not proceed to schema design without explicit user confirmation.*
+
+After the user has answered Phase 6 (Dimensions), you have enough information to produce a complete draft bus matrix:
+
+- **Rows** = each confirmed fact table (one row per grain statement from Phase 3)
+- **Columns** = each confirmed dimension (from Phase 6 answers and the Source Entity Map)
+- **Cells** = ✓ where the fact table has a FK to that dimension, blank where it does not
+
+Produce the bus matrix using the format from `references/kimball-patterns.md §Enterprise Bus Matrix`:
+
+```
+| Fact Table (Process) | Grain | Calendar | [Dim B] | [Dim C] | [Dim D] (local) |
+|---|---|---|---|---|---|
+| Fact.[TableA] | One row per [grain] | ✓ | ✓ | ✓ | ✓ |
+| Fact.[TableB] | One row per [grain] | ✓ | ✓ | | |
+```
+
+Rules:
+- **Bold** column headers = conformed dimensions (used by 2+ fact tables in this subject area)
+- Local dimensions (used by only one fact) = listed last, labelled `(local)`
+- Calendar always comes first after Grain — every fact table should have ✓ here
+- A fact with no Calendar ✓ is flagged 🔴 Critical
+
+Present the bus matrix to the user with this prompt:
+
+> *"Here is the draft bus matrix based on what you've described. Each row is a business process; each column is a dimension. A ✓ means that fact table will have a relationship to that dimension.*
+>
+> *Please review:*
+> *1. Are any rows (business processes / fact tables) missing?*
+> *2. Are any columns (dimensions) missing?*
+> *3. Does any ✓ look wrong — a dimension that should NOT be attached to a fact, or a missing ✓ that should be there?*
+>
+> *Once you confirm this matrix, it becomes the binding blueprint for all subsequent schema design. Changes after this point require the bus matrix to be updated first."*
+
+**Gate**: Do NOT proceed to Phase 7 until the user explicitly confirms or amends the bus matrix.
+
+*For greenfield projects: the signed-off bus matrix is a required prerequisite for Mode N (Full DW Scaffold). Include it as a named artifact in the project spec.*
+
+*For existing DW extensions: compare the new rows/columns against the existing bus matrix (query Mode E against the live schema). Highlight what is new vs what already exists.*
+
+---
 
 Ask all of the following questions:
 
@@ -380,8 +422,17 @@ After all 8 phases are complete, generate the following structured Markdown spec
 | Point-in-time aggregation | End-of-period / Start-of-period / Average | [if semi-additive measures exist] |
 | Date range boundary | Inclusive-inclusive / Other | [default: `>= start AND < next_period_start` in SQL] |
 
+## Bus Matrix
+*Signed off after Phase 6 — this is the binding blueprint for schema design. Do not modify without updating this artifact first.*
 
-### New DW Tables Required
+| Fact Table (Process) | Grain | Calendar | [Dimension B] | [Dimension C] | [Dimension D (local)] |
+|---|---|---|---|---|---|
+| Fact.[TableA] | One row per [grain] | ✓ | ✓ | ✓ | ✓ |
+
+> **Bold dimension headers** = conformed (used by 2+ fact tables). Local dimensions are labelled `(local)`.  
+> A fact row with no Calendar ✓ is a 🔴 Critical gap.
+
+## Proposed Schema
 [List each table with schema prefix: Fact.*, Dimension.*, Staging.*, Internal.*, Snapshots.* as applicable]
 
 *When proposing new tables, apply Roche's Maxim based on the Phase 3 and Phase 5 answers:*
