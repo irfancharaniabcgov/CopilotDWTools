@@ -127,8 +127,8 @@ Flag mismatches between what the user described and what the discovery found, in
 
 **These results feed directly into subsequent phases:**
 - **Phase 3 (Grain)** — Fact candidates and their row counts anchor the grain discussion; pre-populate the grain proposal from the Source Entity Map
-- **Phase 4 (Measures)** — Numeric columns from Q6/Q9 profiling seed the additive/semi-additive/non-additive measure candidate list; do not ask the user to list measures from scratch if numeric columns are already identified
-- **Phase 5 (Dimensions)** — Dimension candidates from the Source Entity Map prime the SCD and hierarchy questions; do not ask the user to list dimensions from scratch if they were already identified here
+- **Phase 5 (Measures)** — Numeric columns from Q6/Q9 profiling seed the additive/semi-additive/non-additive measure candidate list; do not ask the user to list measures from scratch if numeric columns are already identified
+- **Phase 6 (Dimensions)** — Dimension candidates from the Source Entity Map prime the SCD and hierarchy questions; do not ask the user to list dimensions from scratch if they were already identified here
 
 ---
 
@@ -156,7 +156,90 @@ Ask all of the following questions:
 
 ---
 
-### Phase 4 — Measures & KPIs
+### Phase 4 — Business Definitions
+
+These questions establish the **shared vocabulary** between the business and the build team. They look simple but frequently differ between teams, projects, and organisations. Getting them wrong silently corrupts measures.
+
+Ask each question, note the answer, and record the agreed definition in the spec. If the organisation has no documented standard, suggest the recommended default — do not leave the question open.
+
+**NULL / blank values**
+
+- When a numeric measure (e.g. budget, quantity, cost) has no value recorded, should it appear as **zero** or as **blank** in the report?
+  - *Recommended default: **blank** (`BLANK()` in DAX) — excludes the cell from averages and lets visuals show nothing rather than a misleading zero. Choose zero only if the business treats no-entry as no-activity and wants it counted.*
+- When a record cannot be linked to a dimension (e.g. a work order with no assigned department), should it appear in the report as **"Unknown"** or be **excluded entirely**?
+  - *Recommended default: **"Unknown"** — the DW unknown-member sentinel (-1 / '1753-01-01') ensures no rows are silently lost; "Unknown" appears as a filterable value in the report.*
+
+**Status and state definitions**
+
+- For each status field in this report (e.g. Work Order Status, Case Status, Invoice Status): what exactly is **"Open"**? What is **"Closed"**? Are "Cancelled" and "Rejected" the same as "Closed", or separate categories?
+- Is a partially-completed record **"Open"** or **"Closed"**?
+  - *If the org has a documented status matrix, capture it here. If not: list the distinct values found in Q7 and ask the user to group them. Record the grouping — it drives junk dimension values and DAX SWITCH statements.*
+
+**Record corrections and amendments**
+
+- When a transaction is corrected or amended in the source system, should the report show the **original value**, the **corrected value**, or **both**?
+- Are corrections **backdated** (they appear in the original period) or **posted in the current period** as a new entry?
+  - *Backdated corrections → full reload of affected partitions needed; current-period corrections → incremental merge is sufficient. Record this — it directly affects Mode K (ELT strategy).*
+
+**Default exclusions**
+
+- What records are **always excluded** from this report — not toggleable by the user?
+  - Examples: test/dummy records, internal or intercompany transactions, zero-value rows, voided or cancelled entries.
+  - Is there a flag column in the source (e.g. `IsTest`, `IsVoid`, `IsInternal`)? If so, name it.
+  - *Exclusions go into the Staging load SP WHERE clause — these records never enter the DW.*
+
+**"Active" default filter**
+
+- Does the report default to showing only **currently active** records, or **all records** including historical and archived?
+- Is there a user-controlled toggle between "active only" and "all"?
+  - *Active-only default → add `[Is Active]` flag to the dimension, default slicer value = Active. Toggle required → slicer must be visible and clearly labelled.*
+
+**Counting semantics**
+
+- When the report shows "number of [customers / projects / cases / employees]", what is being counted?
+  - Distinct entities that **appear anywhere in the data** (regardless of the selected period)?
+  - Or only entities with **at least one transaction in the selected period**?
+  - Does one entity with multiple transactions count **once** or **once per transaction**?
+  - *This determines whether `DISTINCTCOUNT(Dimension[Key])` or `COUNTROWS(Fact)` is the correct base measure.*
+
+**Negative values and reversals**
+
+- Are negative amounts expected — for example returns, credits, reversals, or adjustments?
+- Should they **net automatically** against positive values in the same measure, or be surfaced in **separate measures**?
+  - *Recommended default: **net** (sum includes negatives). Separate measures are needed only if the business needs to audit reversal volume independently.*
+
+**Variance sign convention**
+
+- If the report includes budget-vs-actual or target-vs-actual: what does a **positive variance** mean — over-budget (bad) or under-budget (good)?
+  - *This is domain-specific and must be explicitly documented. Cost reporting: positive = over = bad. Sales reporting: positive = above target = good. DAX sign convention follows this definition — it cannot be changed later without rewriting measures.*
+
+**Currency and units of measure**
+
+- Does the data contain **multiple currencies**? If yes: what is the reporting currency? What exchange rate is used — transaction-day rate, month-end rate, or a fixed rate?
+- Are there **mixed units** (e.g. hours and days, kg and tonnes, units and cases) in the same measure column? If yes, which unit is canonical for reporting?
+
+**Rounding and precision**
+
+- How many decimal places should each measure display?
+- For financial amounts: do individual line-item values need to **reconcile exactly** to invoice or period totals?
+  - *If exact reconciliation is required: rounding must be applied in the ELT layer per row, not by DAX. Rounding in DAX aggregations can drift by a few cents when rounded values are summed.*
+
+**Fiscal period close and late data**
+
+- How long does a period stay **open for late data entry** after it ends? (e.g. "invoices can be backdated up to 7 days after month-end")
+- Can prior **closed periods be amended** retroactively?
+  - *Open periods → incremental merge can update existing DW rows. Retroactive amendments to closed periods → full partition reload required. Document the window — it drives the ELT watermark logic in Mode K.*
+
+**Point-in-time aggregation** *(skip if no semi-additive measures were identified)*
+
+- For measures that represent a **state at a point in time** (headcount, inventory balance, open case count, account balance): should users see the value at **period end**, **period start**, or an **average** across the period?
+  - *End-of-period → LASTNONBLANK pattern (SQLBI semi-additive). Average → AVERAGEX over Calendar. Both require a periodic snapshot table or the semi-additive calculation — confirm which before building.*
+
+---
+
+### Phase 5 — Measures & KPIs
+
+> *Cross-reference Phase 4 definitions before building measures: NULL/blank semantics affect every aggregation; negative value / netting rules affect SUM patterns; variance sign convention determines DAX formula direction; rounding requirements determine whether rounding happens in ELT or DAX.*
 
 Ask all of the following questions:
 
@@ -175,9 +258,9 @@ Ask all of the following questions:
 
 ---
 
-### Phase 5 — Dimensions & Filters
+### Phase 6 — Dimensions & Filters
 
-Ask all of the following questions:
+> *Cross-reference Phase 4 definitions before designing dimensions: status/state groupings drive junk dimension values; active/inactive default filter drives `[Is Active]` flag design; counting semantics affect whether degenerate dimensions are needed.*
 
 - What should users be able to filter or slice the data by? (List all — for example: Date, Region, Department, Project, Employee, Product)
 - For each dimension: does its data change over time? (For example: an employee changes department — do you need to track the historical department they were in *at the time of a transaction*, or is today's value always sufficient?)
@@ -219,7 +302,7 @@ Ask all of the following questions:
 
 ---
 
-### Phase 6 — Time Intelligence
+### Phase 7 — Time Intelligence
 
 Ask all of the following questions:
 
@@ -229,7 +312,7 @@ Ask all of the following questions:
 
 ---
 
-### Phase 7 — Data Sensitivity & Access
+### Phase 8 — Data Sensitivity & Access
 
 Ask all of the following questions:
 
@@ -239,7 +322,7 @@ Ask all of the following questions:
 
 ---
 
-### Phase 8 — Refresh & Performance
+### Phase 9 — Refresh & Performance
 
 Ask all of the following questions:
 
@@ -276,14 +359,35 @@ After all 8 phases are complete, generate the following structured Markdown spec
 ## Grain
 **Fact table grain**: One row = [confirmed grain statement from Phase 3]
 
-## Proposed Schema
+## Business Definitions
+*Agreed definitions from Phase 4 — these are binding for all measures, ELT SPs, and dimension design in this project.*
+
+| Definition | Agreed Value | Notes |
+|---|---|---|
+| NULL / blank measures | BLANK() / Zero | [from Phase 4] |
+| Unlinked FK records | "Unknown" / Excluded | [from Phase 4] |
+| "Open" status means | [list of source status values] | |
+| "Closed" status means | [list of source status values] | |
+| Record corrections | Original / Corrected / Both; Backdated / Current-period | |
+| Default exclusions | [list exclusion rules and source flags] | |
+| Default active filter | Active only / All records / User-toggleable | |
+| Counting unit | Distinct entity / Transaction-level | [e.g. DISTINCTCOUNT vs COUNTROWS] |
+| Negative values | Net / Separate | |
+| Positive variance means | Over (bad) / Under (bad) / Above target (good) | [per measure, if mixed] |
+| Reporting currency | [currency code] | [exchange rate method] |
+| Rounding precision | [N decimal places]; Row-level / Aggregate-level | |
+| Period close window | [N days] after period end | [retroactive amendments: Y/N] |
+| Point-in-time aggregation | End-of-period / Start-of-period / Average | [if semi-additive measures exist] |
+| Date range boundary | Inclusive-inclusive / Other | [default: `>= start AND < next_period_start` in SQL] |
+
+
 ### New DW Tables Required
 [List each table with schema prefix: Fact.*, Dimension.*, Staging.*, Internal.*, Snapshots.* as applicable]
 
-*When proposing new tables, apply Roche's Maxim based on the Phase 3 and Phase 4 answers:*
+*When proposing new tables, apply Roche's Maxim based on the Phase 3 and Phase 5 answers:*
 - *If Phase 3 revealed open/active things that need point-in-time counts: include a `Snapshots.*` periodic snapshot table rather than relying on DAX FILTER patterns*
-- *If Phase 4 revealed pre-defined business tiers or classifications: include those as columns in the appropriate `Dimension.*` table rather than as DAX measures*
-- *If Phase 4 revealed budget/target values that need finer granularity: include a pre-spread `Fact.*` table rather than DAX division logic*
+- *If Phase 5 revealed pre-defined business tiers or classifications: include those as columns in the appropriate `Dimension.*` table rather than as DAX measures*
+- *If Phase 5 revealed budget/target values that need finer granularity: include a pre-spread `Fact.*` table rather than DAX division logic*
 
 ### Existing Tables to Reuse
 [List tables already in the DW that this report will use without modification]
