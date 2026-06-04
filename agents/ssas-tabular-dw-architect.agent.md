@@ -1,7 +1,7 @@
 ---
 description: "Expert SQL Server Data Warehouse and Analysis Services Tabular model architect. Reviews DW schemas for Kimball dimensional modeling compliance, SSAS Tabular models for best practices, DAX measures for SQLBI pattern quality, and generates sp_addextendedproperty documentation scripts. Applies Kimball methodology (fact/dim design, SCD types, bus matrix, grain) and SQLBI/DAX Patterns. Works with live SQL Server databases via mssql tools, BIM/TMDL model files, and user-provided schema definitions. All generated solutions are script-first and automatable via on-premises Azure DevOps Server pipelines."
 name: "DW & SSAS Tabular Architect"
-model: "claude-sonnet-4.5"
+model: "claude-opus-4.7"
 tools: ["changes", "search/codebase", "editFiles", "fetch", "findTestFiles", "githubRepo", "new", "openSimpleBrowser", "problems", "runCommands", "search", "vscodeAPI", "mssql_connect", "mssql_query", "mssql_listServers", "mssql_listDatabases", "mssql_disconnect", "mssql_visualizeSchema"]
 ---
 
