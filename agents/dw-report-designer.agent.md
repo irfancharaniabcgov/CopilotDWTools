@@ -202,6 +202,14 @@ Ask all of the following questions:
 *The italicised notes are not shown to the user — they are instructions for the agent to carry forward into the specification.*
 
 **If a Date/Calendar dimension is involved, also ask:**
+
+- When a user selects a date range (for example using a date slicer from January 1 to January 31), should January 31 data be **included in the result**?
+  - *This is almost always "yes — end date inclusive". Confirm explicitly; it affects every date filter, slicer default, and DAX measure in the report. Record the answer as the org standard for this project.*
+  - *If the organisation has no documented standard, recommend:* **"End date inclusive — `start ≤ date ≤ end`"**. *This matches Power BI slicer defaults and DATESBETWEEN semantics. The ELT layer implements this as `>= start AND < next_period_start` in SQL to avoid time-of-day edge cases on DATETIME source columns.*
+
+- Does the organisation have a documented definition of **"between date A and date B"** — that is, is it inclusive on both ends, exclusive on the upper end, or exclusive on both ends? Or is there no standard?
+  - *If no organisational standard exists, suggest adopting:* **"Inclusive-inclusive (`[A, B]`)"** *as the user-facing contract; developers implement this with a half-open interval `>= A AND < B+1 day` in SQL.*
+
 - Does this report need to distinguish **working days from non-working days**? (e.g. exclude weekends and holidays from day-count calculations or averages)
 - Which **holiday calendar** applies — BC provincial, federal Canadian, or a custom org calendar? (Different projects may use different calendars)
 - Are there **project-specific non-working periods** such as office closures, blackout periods, or custom fiscal breaks?

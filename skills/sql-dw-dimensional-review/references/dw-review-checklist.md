@@ -350,6 +350,8 @@ $resp = Invoke-WebRequest "http://PBIRS_SERVER/ReportServer/api/v2.0/System" -Us
 |---|---|---|
 | No `FILTER(AllTable, [Measure] > x)` patterns | 🟡 | FE overhead; replace with column filter |
 | All time intelligence measures use the marked Date Table | 🔴 | |
+| Date range boundary convention documented and consistent: inclusive-inclusive user contract; half-open `>= start AND < end+1` in ELT SQL | 🟠 | Undocumented convention causes silent last-day data loss when switching between implementations |
+| No `BETWEEN` on DATETIME source columns in ELT SPs | 🟠 | Use `>= start AND < next_period_start` — `BETWEEN` drops 23:59:59 on the upper bound |
 | `USERELATIONSHIP` used correctly for role-playing dimensions | 🟡 | |
 | Calculation Groups (if present) have Precedence set and documented | 🟡 | |
 | Dynamic RLS measures tested under impersonation | 🔴 | |

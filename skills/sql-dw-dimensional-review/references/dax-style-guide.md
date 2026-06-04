@@ -196,7 +196,42 @@ DIVIDE(
 )
 ```
 
-## Anti-patterns
+### Date range boundary convention
+
+The org standard for date range semantics is **inclusive on both ends from the user's perspective**: when a user selects "January 1 to January 31", all data on January 31 is included.
+
+**In DAX** — this maps directly to `DATESBETWEEN` semantics (both ends inclusive). Since `[Date Key]` is `DATE` type (no time component), `DATESBETWEEN` is safe:
+
+```dax
+-- Correct: inclusive both ends on a DATE column
+January Sales =
+CALCULATE(
+    [Total Sales Amount],
+    DATESBETWEEN( 'Calendar'[Date Key], DATE(2024,1,1), DATE(2024,1,31) )
+)
+```
+
+Standard time intelligence functions (`DATESYTD`, `DATESMTD`, `DATESQTD`, `SAMEPERIODLASTYEAR`) manage their own boundaries automatically — do not wrap them in additional `DATESBETWEEN` calls.
+
+**In SQL (ELT load SPs and queries against the DW)** — implement the user-facing inclusive contract using a **half-open interval** to avoid time-of-day issues on `DATETIME` source columns (even though the DW `[Date Key]` is `DATE`, source systems may use `DATETIME`):
+
+```sql
+-- ✅ Half-open interval — preferred in ELT SQL
+WHERE [OrderDateKey] >= '2024-01-01' AND [OrderDateKey] < '2024-02-01'
+
+-- ❌ BETWEEN on a DATETIME source column — avoid (misses 23:59:59 on the last day)
+WHERE [OrderDate] BETWEEN '2024-01-01' AND '2024-01-31'
+```
+
+> **If no org standard exists for a project**: record the decision in the project spec and adopt **inclusive-inclusive** as the user-facing contract with half-open implementation in SQL. This is the Power BI slicer default and requires no special end-user documentation.
+
+| Anti-pattern | Why forbidden | Correct alternative |
+|---|---|---|
+| `BETWEEN` on DATETIME columns in ELT | Misses rows at 23:59:59 on the last day | Use `>= start AND < next_period_start` |
+| `DATESBETWEEN` on non-DATE column | Unreliable boundary matching on DATETIME | Convert to DATE or use Calendar column |
+| Hardcoded end-exclusive boundaries without documentation | Silently drops last-day data; confuses reviewers | Document convention in measure Description |
+
+
 
 ### Forbidden patterns
 
