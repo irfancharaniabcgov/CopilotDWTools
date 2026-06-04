@@ -223,13 +223,13 @@ Mode P runs discovery queries in this sequence:
 
 > **If the source database has no FK constraints defined** (Q4 returns zero rows database-wide), Mode P will infer relationships from column naming patterns. **All inferred relationships must be presented in a separate, clearly-labelled "Inferred Relationships (low confidence)" section of the entity map.** Do not list them alongside FK-confirmed relationships. Warn the user: *"This source database has no FK constraints defined. The relationships in the 'Inferred' section were derived from column-name matching and table row counts — please review each one before we proceed. Any you confirm will be promoted to the main relationships section; any you reject will be removed."*
 
-**Non-SQL Server sources** (Salesforce, REST APIs, flat file extracts, Oracle, MySQL, SAP, etc.): The T-SQL discovery queries cannot run. Apply this fallback in order of preference:
+**Non-SQL Server sources** (CSV, Salesforce, Oracle, PostgreSQL, or any other source): The T-SQL discovery queries cannot run. Use a **manual discovery path**:
 
-1. **Ask the user for a schema export** — most source systems can produce a CSV/JSON schema dump (Salesforce Workbench, Oracle `ALL_TAB_COLUMNS`, MySQL `INFORMATION_SCHEMA`, SAP table directory). If the user can provide one, parse it for table/column lists, PK/FK metadata where present, and produce a manually-built entity map with confidence marked as `low — schema-only, no profiling`.
-2. **If schema export is not available**: ask the user to provide sample extracts (10–100 rows per relevant entity) as CSV. Profile these manually — record column-level NULL rates, distinct value counts, and inferred PKs.
-3. **If neither is available**: document the source in the entity map as `requires connector design` with a placeholder. Note that Salesforce specifically requires the KingswaySoft SSIS connector (no native SSIS connector); other non-SQL sources need a per-source connector decision before Mode K can be planned.
+1. Ask the user to provide the source schema (table/column list, PKs, FKs where defined) and a sample extract (10–100 rows per relevant entity) — schema export from the source platform's standard tooling is typically sufficient.
+2. Build `design/entity-map.md` manually from the provided schema and samples. Mark all entries with confidence `low — manual, no automated profiling` until the user confirms each one.
+3. Note the connector requirement for the eventual SSIS data flow (e.g. Salesforce requires the KingswaySoft SSIS connector; flat files use the SSIS Flat File connector; Oracle/PostgreSQL use ODBC or vendor OLE DB providers).
 
-For all non-SQL sources, the entity map confidence rating is `low` until the user confirms each entity manually. Mode N must not proceed past Mode P for these sources until the user explicitly signs off the manually-built entity map.
+Mode N must not proceed past Mode P for non-SQL sources until the user explicitly signs off the manually-built entity map.
 
 Present the Source Entity Map to the user before continuing.
 
