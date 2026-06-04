@@ -209,9 +209,9 @@ Ask all of the following. Wait for answers before proceeding to Step 3.
 
 #### Step 3 — Source system discovery
 
-For each source system named in Phase 2, determine its connectivity profile, then run the appropriate discovery path.
+For each source system named in Phase 2, route to the appropriate discovery path based on what the source can provide.
 
-**SQL Server sources (the default path):** Connect to the source database via `mssql_connect` and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
+**Path A — SQL Server source (automated, full profiling):** Connect to the source database via `mssql_connect` and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
 
 Mode P runs discovery queries in this sequence:
 
@@ -223,13 +223,24 @@ Mode P runs discovery queries in this sequence:
 
 > **If the source database has no FK constraints defined** (Q4 returns zero rows database-wide), Mode P will infer relationships from column naming patterns. **All inferred relationships must be presented in a separate, clearly-labelled "Inferred Relationships (low confidence)" section of the entity map.** Do not list them alongside FK-confirmed relationships. Warn the user: *"This source database has no FK constraints defined. The relationships in the 'Inferred' section were derived from column-name matching and table row counts — please review each one before we proceed. Any you confirm will be promoted to the main relationships section; any you reject will be removed."*
 
-**Non-SQL Server sources** (CSV, Salesforce, Oracle, PostgreSQL, or any other source): The T-SQL discovery queries cannot run. Use a **manual discovery path**:
+**Path B — CSV source (automated profiling):** Use the CSV discovery path in `references/source-system-analysis.md` § "CSV Source Discovery". This path applies to:
 
-1. Ask the user to provide the source schema (table/column list, PKs, FKs where defined) and a sample extract (10–100 rows per relevant entity) — schema export from the source platform's standard tooling is typically sufficient.
-2. Build `design/entity-map.md` manually from the provided schema and samples. Mark all entries with confidence `low — manual, no automated profiling` until the user confirms each one.
-3. Note the connector requirement for the eventual SSIS data flow (e.g. Salesforce requires the KingswaySoft SSIS connector; flat files use the SSIS Flat File connector; Oracle/PostgreSQL use ODBC or vendor OLE DB providers).
+- Direct flat-file feeds (one or more CSVs delivered on a schedule)
+- **CSV exports from any other source system** — if the user can provide a CSV header export or sample extract from Salesforce, Oracle, PostgreSQL, MySQL, or any other system, treat that as a CSV source for discovery purposes (the eventual SSIS load will use the appropriate connector, but the entity-map discovery is the same)
 
-Mode N must not proceed past Mode P for non-SQL sources until the user explicitly signs off the manually-built entity map.
+Ask the user: *"Can you provide a CSV export — either the actual data or just a header export with a sample of rows — for each entity you want in the DW? I can profile the CSV files automatically and produce the same entity map as I would for a SQL Server source."*
+
+Profile each CSV using whichever tool is available in the session (PowerShell `Import-Csv`, Python `pandas`, or bulk-load to SQL Server). Output goes to `design/entity-map.md` in the same format as Path A. All FK relationships are inferred (CSV has no constraint metadata) and go into the "Inferred Relationships (low confidence)" section.
+
+**Path C — Manual discovery (last resort):** Only when the user cannot provide a CSV export and the source is not SQL Server. Examples: legacy mainframe, proprietary API with no metadata export.
+
+1. Ask the user to describe each entity in plain language (table name, key fields, relationships).
+2. Build `design/entity-map.md` manually with confidence marked `low — no automated profiling`.
+3. Note the connector requirement for the eventual SSIS data flow (e.g. Salesforce requires the KingswaySoft SSIS connector; mainframes typically need a custom extract job; REST APIs need a per-API script).
+
+Mode N must not proceed past Mode P for Path B or Path C sources until the user explicitly signs off the entity map.
+
+Present the Source Entity Map to the user before continuing.
 
 Present the Source Entity Map to the user before continuing.
 

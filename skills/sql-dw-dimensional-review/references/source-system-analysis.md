@@ -414,6 +414,67 @@ Confirm: does the report need line-item detail within a work order, or is one-ro
 
 ---
 
+## CSV Source Discovery (automated)
+
+For sources delivered as CSV files — either directly (flat file extracts) or as metadata/header exports from non-SQL systems (Salesforce, Oracle, PostgreSQL, etc.) — apply automated profiling instead of T-SQL queries. The output format (Source Entity Map) is identical to the SQL Server path so downstream phases consume it the same way.
+
+### Inputs required from the user
+
+1. **The CSV file(s)** — either the actual source data extract or a header-only / sample export (10–1000 rows is sufficient for profiling)
+2. **One CSV per logical entity** — if the source is Salesforce, that means one CSV per object (Account.csv, Opportunity.csv, etc.). If the source is a single flat-file feed, that is one CSV.
+3. **The delimiter and quoting convention** if non-standard (default assumed: comma-delimited, double-quote text qualifier, header row in row 1)
+4. **Any known PK columns or FK relationships** that aren't obvious from column names — CSV has no constraint metadata
+
+### Automated profiling
+
+For each CSV file, derive the same information that Q1–Q9 produce for SQL Server:
+
+| SQL Server query | CSV equivalent |
+|---|---|
+| Q1 Table inventory | List of CSV files + row count per file (line count − 1 header row) + column count (header row length) |
+| Q2 Date / status column detection | Parse header names for `Date`, `Time`, `Status`, `Type`, `Code`, `Flag` patterns; sample-parse first 100 values per candidate column to confirm date parseability and value cardinality |
+| Q3 Primary key map | Profile each column for uniqueness across the full file (or sample); flag single columns and 2–3 column combinations with 100% uniqueness as PK candidates |
+| Q4 Foreign key relationship map | Name-pattern match: columns named `[Entity]ID`, `[Entity]Key`, `[Entity]Code` in one file matched against PK candidates in other files. Treat all CSV-derived relationships as **inferred** (CSV has no FK metadata). |
+| Q5 Inbound/outbound FK count | Derived from Q4 inferred relationships |
+| Q6 NULL rate check | Count empty strings + `NULL` literal per column; report percentage |
+| Q7 Cardinality profiling | Distinct count + top 20 values per status/type column |
+| Q8 Duplicate PK check | Group-by on PK candidate; report any group count > 1 |
+| Q9 Date range profiling | MIN/MAX of parsed date values per date column on each Fact candidate |
+| Q10 CDC / Change Tracking | Not applicable — CSV is a snapshot. Ask the user: is this a one-time load, an incremental drop (daily file with new rows only), or a full snapshot per delivery? This determines the ELT strategy. |
+
+### Tools
+
+Profile the CSV using whichever discovery tool is available in the session:
+
+- **PowerShell** (always available in this environment): `Import-Csv` for parsing, `Group-Object` for cardinality and PK uniqueness, `Measure-Object` for row count and NULL rate
+- **Python** with `pandas` (if Python is available): `pd.read_csv` + `df.describe(include='all')` + `df.nunique()` + `df.isna().sum()`
+- **SQL Server** as a staging tool (if available): bulk-load the CSV into a `Staging` table and run the standard Q1–Q9 queries against it
+
+Use the simplest available tool. Do not require a specific tool — adapt to what's in the session.
+
+### Output
+
+Produce the same `design/entity-map.md` structure as the SQL Server path. Add a header note:
+
+> **Source type:** CSV — [file count] file(s), [delivery method: one-time / incremental / full snapshot]
+> **Discovery confidence:** medium — automated profiling complete; all FK relationships are inferred from column names (CSV has no constraint metadata). User confirmation required before Phase 3.
+
+All FK relationships derived from CSV go into the **Inferred Relationships** section, never the main relationship list — same rule as SQL Server with no FK constraints.
+
+### When the user can't provide a CSV
+
+Some non-SQL sources (legacy mainframes, proprietary APIs) cannot easily produce a header export. In that case, fall back to fully **manual discovery**:
+
+1. Ask the user to describe each entity in plain language (table name, key fields, relationships).
+2. Build `design/entity-map.md` manually from the description with confidence marked `low — no automated profiling`.
+3. Note the connector requirement for the eventual SSIS data flow (e.g. Salesforce requires the KingswaySoft SSIS connector; mainframes typically need a custom extract job; REST APIs need a per-API script).
+
+Mode N must not proceed past Mode P for manual-discovery sources until the user explicitly signs off the manually-built entity map.
+
+---
+
+
+
 ## Feeding Phases 3, 4, and 5
 
 After presenting the Source Entity Map:

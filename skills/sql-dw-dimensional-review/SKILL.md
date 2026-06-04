@@ -434,9 +434,12 @@ At the end of a successful Mode N run, produce a delivery summary:
 
 **Trigger:** User says "explore source", "analyse source database", "my data is in [SourceDB]", "I want to build a DW for [subject area]", or invokes Mode P explicitly. Also activated by `dw-report-designer` Phase 2 Step 3 for each source system named by the user.
 
-**Input:** Source server name + source database name. Optionally: a comma-separated list of table names to focus on (use when the database is large and only a subset is relevant to the subject area).
+**Input:** Source identifier + connection details. The shape of the input depends on the source type:
+- **SQL Server**: server name + database name (+ optional filtered table list)
+- **CSV**: one or more CSV files (the actual data, a header-only export, or a sample extract) + delimiter/quoting convention if non-standard
+- **Other (manual)**: user-provided plain-language description of entities, keys, and relationships
 
-**Process:**
+#### Path A — SQL Server (automated, full profiling)
 
 1. Connect to the source database using the `ms-mssql.mssql` MCP tool.
 2. Run **Q1–Q5 once across the full source database** (or filtered table list if supplied):
@@ -457,19 +460,37 @@ At the end of a successful Mode N run, produce a delivery summary:
 
 **No FK constraints:** When Q4 returns zero rows database-wide, apply implied FK detection — columns in high-row-count tables named `[EntityName]ID` / `[EntityName]Key` / `[EntityName]Code` whose names match PK column names in lower-row-count tables. Present these as *inferred* relationships in a separate section of the entity map, clearly labelled. Warn the user that these must be confirmed.
 
+#### Path B — CSV (automated profiling)
+
+Applies to direct flat-file feeds **and** CSV header/sample exports from any other source system (Salesforce, Oracle, PostgreSQL, MySQL, etc.). See `references/source-system-analysis.md` § "CSV Source Discovery" for the full procedure.
+
+1. Profile each CSV using whichever tool is available: PowerShell `Import-Csv`, Python `pandas`, or bulk-load to SQL Server staging.
+2. Derive the same outputs as Q1–Q9 (table inventory, date/status columns, PK candidates, inferred FKs, NULL rates, cardinality, duplicate PK check, date range profiling).
+3. Q10 (CDC) is not applicable — ask the user whether the CSV represents a one-time load, an incremental drop, or a full snapshot per delivery; record the answer for Mode K.
+4. All FK relationships derived from CSV are **inferred** and go into the "Inferred Relationships (low confidence)" section of the entity map.
+
+#### Path C — Manual discovery (last resort)
+
+Used only when the source is non-SQL **and** the user cannot provide a CSV export (e.g. legacy mainframe, proprietary API).
+
+1. Ask the user to describe each entity in plain language (table name, key fields, relationships).
+2. Build the entity map manually with confidence marked `low — no automated profiling`.
+3. Record the connector requirement for the eventual SSIS data flow.
+
 **Output:** Structured Source Entity Map document saved to `design/entity-map.md` (append new entities if file already exists; never overwrite). Contents:
+- Source type marker (SQL Server / CSV / Manual) + discovery confidence rating
 - Fact candidates (rows, date columns, FK columns, grain proposal)
 - Dimension candidates (rows, natural key, SCD potential)
 - Reference/lookup tables and junk dimension candidates
-- Source Change Detection summary (CDC/CT status from Q10)
-- Inferred relationships (if no FK constraints)
+- Source Change Detection summary (CDC/CT status from Q10, or CSV delivery cadence)
+- Inferred relationships (always for CSV; for SQL Server only when no FK constraints)
 - Ignored tables (with reason)
 - Data quality flags (NULL rates from Q6, duplicate PK issues from Q8)
 - Date range summary per Fact candidate (from Q9)
 
 **Consumer:** Phase 2 of `dw-report-designer.agent.md` calls this mode for each named source system. The entity map feeds Phase 3 (grain confirmation), Phase 4 (measure candidates from numeric columns), and Phase 5 (dimension design) — do not repeat discovery questions already answered in the entity map.
 
-**Reference:** `references/source-system-analysis.md` for all query text, classification heuristics, and output format.
+**Reference:** `references/source-system-analysis.md` for all query text, CSV profiling procedure, classification heuristics, and output format.
 
 
 
