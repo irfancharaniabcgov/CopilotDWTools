@@ -41,7 +41,17 @@ At the start of each new phase, briefly summarise what you have captured so far.
 
 ### Session Initialization — Decisions Register Check
 
-Before starting Phase 1, ask the user for the project name if it is not already known from context. Then check the workspace for `decisions/[ProjectName]-decisions.md`.
+Before starting Phase 1, ask the user for the project name if it is not already known from context. Then check the workspace for a `design/` folder at the repository root.
+
+**All design artifacts for this project live in `design/` at the repo root:**
+- `design/spec.md` — living design specification (this file; update in-place)
+- `design/decisions.md` — decisions register (business definitions, ADRs, deferred scope)
+- `design/bus-matrix.md` — signed-off bus matrix
+- `design/entity-map.md` — source entity map from Mode P discovery
+
+If `design/` does not exist, create it. **Always check whether a file exists before creating it — if it exists, open it and update the relevant sections; never overwrite the whole file.**
+
+Check the workspace for `design/decisions.md`.
 
 **If the file exists:**
 1. Read the file and note the `Last confirmed` date in the header.
@@ -261,7 +271,7 @@ Ask each question, note the answer, and record the agreed definition in the spec
 
 ### Decisions Register — Write Draft
 
-After the user answers Phase 4, write or update `decisions/[ProjectName]-decisions.md` with all answers collected so far (Phases 1–4). Mark the file status as `DRAFT`.
+After the user answers Phase 4, write or update `design/decisions.md` with all answers collected so far (Phases 1–4). Mark the file status as `DRAFT`.
 
 - Populate all `BD-*` rows from Phase 4 answers; populate `RI-*` rows from Phase 1 answers
 - Apply scope inference when populating the `Scope` column:
@@ -272,7 +282,7 @@ After the user answers Phase 4, write or update `decisions/[ProjectName]-decisio
 - If the file already existed: update rows with new answers; preserve rows not revisited
 
 Say to the user:
-> *"I've saved a draft decisions register to `decisions/[ProjectName]-decisions.md`. This captures the business definitions we've agreed on. Any future session or developer can load this file to pick up where we left off."*
+> *"I've saved a draft decisions register to `design/decisions.md`. This captures the business definitions we've agreed on. Any future session or developer can load this file to pick up where we left off."*
 
 ---
 
@@ -439,7 +449,7 @@ Ask all of the following questions:
 
 ## Specification Document
 
-After all 8 phases are complete, generate the following structured Markdown specification document:
+After all 8 phases are complete, generate the following structured Markdown specification document. Save it as `design/spec.md` (update in-place if the file already exists — never overwrite, only patch changed sections).
 
 ```markdown
 # DW Report Design Specification
@@ -591,7 +601,7 @@ After the user confirms the specification:
 6. Commit the file to source control alongside the project
 
 Say to the user:
-> *"The decisions register is finalised at `decisions/[ProjectName]-decisions.md`. Commit this alongside the project — any future agent session or developer can load it to understand why the model is designed this way and to skip re-asking questions that are already answered."*
+> *"The decisions register is finalised at `design/decisions.md`. Commit the `design/` folder alongside the project — any future agent session or developer can load these files to understand why the model is designed this way and to skip re-asking questions that are already answered."*
 
 ---
 

@@ -301,16 +301,30 @@ Each mode produces a named artifact that the next mode consumes:
 
 | Producer | Artifact | Consumer |
 |---|---|---|
-| Mode E | `{Project}_BusMatrix.md` (signed-off bus matrix) | Mode H (table list + FK structure), Mode I (dimension relationships) |
-| Mode H | `{Project}_DW_Schema.sql` (Dimension + Fact + Staging tables) | Mode J (SPs reference these tables) |
-| Mode H | `{Project}_SSAS_Views.sql` (in `SSAS` schema) | Mode I (partition source view names) |
-| Mode H | `{Project}_Staging_Schema.sql` | Mode J (SPs load staging entities) |
-| Mode J | `{Project}_LoadSPs.sql` | Mode K (SSIS packages call these SPs) |
-| Mode J | `{Project}_LoadSPs.sql` | Mode I (SSAS partition queries hit DW tables loaded by SPs) |
-| Mode K | `ssis_catalog_configuration.json` | Mode M (pipeline deploys SSIS project + configures catalog) |
-| Mode I | `{Project}_TMDL/` | Mode L (measures added to this model) |
-| Mode L | Updated `{Project}_TMDL/` | Mode M (deployed via TE2 CLI) |
-| Mode M | `{Project}_Pipeline.md` | User review |
+| Mode E | `design/bus-matrix.md` (signed-off bus matrix — create or update in-place) | Mode H (table list + FK structure), Mode I (dimension relationships) |
+| Mode H | `DW/Dimension/[TableName].sql` — one file per new Dimension table | Mode J (SPs reference these tables) |
+| Mode H | `DW/Fact/[TableName].sql` — one file per new Fact table | Mode J |
+| Mode H | `DW/Staging/[TableName].sql` — one file per new Staging table | Mode J |
+| Mode H | `DW/Internal/[TableName].sql` — one file per new Internal table | Mode J |
+| Mode H | `DW/SSAS/[ViewName].sql` — one file per new SSAS schema view | Mode I (partition source view names) |
+| Mode J | `DW/Dimension/Load[EntityName].sql` — one SP file per dimension entity | Mode K (SSIS packages call these SPs) |
+| Mode J | `DW/Fact/Load[EntityName].sql` — one SP file per fact entity | Mode K, Mode I |
+| Mode J | `DW/Staging/Load[EntityName].sql` — one SP file per staging entity | Mode K |
+| Mode K | `SSIS/{ProjectName}_SSIS/ssis_catalog_configuration.json` (create or update in-place) | Mode M (pipeline deploys SSIS project + configures catalog) |
+| Mode I | `SSAS/{ModelName}/` (update existing TMDL — add tables/relationships, do not overwrite) | Mode L (measures added to this model) |
+| Mode L | Updated `SSAS/{ModelName}/tables/[MeasureTable].tmdl` | Mode M (deployed via TE2 CLI) |
+| Mode M | Build and deployment notes (pipeline definitions live in ADO Server UI, not in this repo) | User review |
+
+#### Update-in-place rule for design artifacts
+
+Design artifacts in `design/` are **living documents — updated in-place, never regenerated from scratch**:
+
+- **`design/spec.md`**: Open the existing file; update only the section(s) affected by the current session. Do not touch sections that were not discussed.
+- **`design/decisions.md`**: Update or add rows; never delete rows. If an answer changes, record the new answer in the Answer column and note the prior value in Notes.
+- **`design/bus-matrix.md`**: Update the markdown table when fact tables or dimensions are added or changed. Add a change log entry with date and description.
+- **`design/entity-map.md`**: Append new entities when Mode P is re-run; do not overwrite existing profiling data.
+
+If a `design/` folder does not yet exist, create it. Check for the file before writing — if it exists, open and patch; if it does not exist, create it from the relevant template in the `CopilotDWTools` toolkit.
 
 #### Idempotency rules
 
@@ -352,14 +366,20 @@ At the end of a successful Mode N run, produce a delivery summary:
 
 | Artifact | Status | File / Location |
 |---|---|---|
-| DW Schema | ✅ Created | {Project}_DW_Schema.sql |
-| SSAS Views | ✅ Created | {Project}_SSAS_Views.sql |
-| Staging Schema | ✅ Created | {Project}_Staging_Schema.sql |
-| Load SPs | ✅ Created | {Project}_LoadSPs.sql |
-| SSIS Catalog Config | ✅ Scaffolded | ssis_catalog_configuration.json |
-| SSAS Model (TMDL) | ✅ Scaffolded | {Project}_TMDL/ |
-| DAX Measures | ✅ Created | in TMDL |
-| ADO Pipeline | ✅ Scaffolded | {Project}_Pipeline.md |
+| Bus Matrix | ✅ Updated | `design/bus-matrix.md` |
+| Design Spec | ✅ Updated | `design/spec.md` |
+| Decisions Register | ✅ Updated | `design/decisions.md` |
+| Source Entity Map | ✅ Updated | `design/entity-map.md` |
+| DW Dimension tables | ✅ Created/Updated | `DW/Dimension/[Table].sql` (one file per object) |
+| DW Fact tables | ✅ Created/Updated | `DW/Fact/[Table].sql` (one file per object) |
+| DW Staging tables | ✅ Created/Updated | `DW/Staging/[Table].sql` (one file per object) |
+| SSAS schema views | ✅ Created/Updated | `DW/SSAS/[View].sql` (one file per object) |
+| Dimension load SPs | ✅ Created/Updated | `DW/Dimension/Load[Entity].sql` (one file per SP) |
+| Fact load SPs | ✅ Created/Updated | `DW/Fact/Load[Entity].sql` (one file per SP) |
+| Staging load SPs | ✅ Created/Updated | `DW/Staging/Load[Entity].sql` (one file per SP) |
+| SSIS Catalog Config | ✅ Created/Updated | `SSIS/{ProjectName}_SSIS/ssis_catalog_configuration.json` |
+| SSAS Model (TMDL) | ✅ Updated | `SSAS/{ModelName}/` (patched, not replaced) |
+| ADO Pipeline | ✅ Notes generated | Pipeline definitions live in ADO Server UI — see next steps |
 
 ### Validation results
 - Mode A (DW Schema Review): ✅ No CRITICAL findings
@@ -432,7 +452,7 @@ At the end of a successful Mode N run, produce a delivery summary:
 
 **No FK constraints:** When Q4 returns zero rows database-wide, apply implied FK detection — columns in high-row-count tables named `[EntityName]ID` / `[EntityName]Key` / `[EntityName]Code` whose names match PK column names in lower-row-count tables. Present these as *inferred* relationships in a separate section of the entity map, clearly labelled. Warn the user that these must be confirmed.
 
-**Output:** Structured Source Entity Map document containing:
+**Output:** Structured Source Entity Map document saved to `design/entity-map.md` (append new entities if file already exists; never overwrite). Contents:
 - Fact candidates (rows, date columns, FK columns, grain proposal)
 - Dimension candidates (rows, natural key, SCD potential)
 - Reference/lookup tables and junk dimension candidates

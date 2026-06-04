@@ -1,4 +1,4 @@
-# On-Premises Azure DevOps Server — Operations & Tooling Patterns
+# On-Premises Azure DevOps Server ï¿½ Operations & Tooling Patterns
 
 **Companion file to [devops-deployment-patterns.md](devops-deployment-patterns.md).** That file covers the Core Principles, Stack Overview, and per-component deployment steps (DACPAC, SSIS, SSAS Tabular, PBIRS). This file covers the supporting patterns: pipeline scripts, tooling setup, repository conventions, and operational procedures.
 
@@ -135,13 +135,19 @@ catch {
 
 YourDWProject/
 
+|-- design/                            # Requirements and design artifacts â€” agent-maintained, committed to git
+|   |-- spec.md                        # Living design specification (update in-place, never regenerate)
+|   |-- decisions.md                   # Decisions register: business definitions, ADRs, deferred scope
+|   |-- bus-matrix.md                  # Signed-off enterprise bus matrix (update when model changes)
+|   `-- entity-map.md                  # Source entity map from Mode P discovery (update on re-run)
+
 |-- DW/                                # SSDT solution and database project
 
 |   |-- {ProjectName}.sln
 
 |   |-- {ProjectName}.sqlproj
 
-|   |-- Dimension/
+|   |-- Dimension/                     # One .sql file per table/view/SP â€” e.g. Calendar.sql, LoadCustomer.sql
 
 |   |-- Fact/
 
@@ -149,7 +155,7 @@ YourDWProject/
 
 |   |-- Internal/
 
-|   |-- SSAS/
+|   |-- SSAS/                          # SSAS schema views: one .sql file per view
 
 |   `-- Scripts/
 
@@ -186,8 +192,6 @@ YourDWProject/
     `-- *.pbix
 
 ```
-
-
 
 > **Classic pipeline definitions are stored in the ADO Server UI, not in this repo.**
 
@@ -518,29 +522,29 @@ In scripted mode: add `-RetainPartitions -RetainRoleMembers -RetainDataSources` 
 
 ---
 
-## 12. Incident Response — Roll-Forward Philosophy
+## 12. Incident Response ï¿½ Roll-Forward Philosophy
 
 ### Philosophy
 
 This organisation uses a **roll-forward** approach to production incidents. When a defect is
-discovered in PROD, the response is to fix it, test it, and deploy the fix — not to revert to
+discovered in PROD, the response is to fix it, test it, and deploy the fix ï¿½ not to revert to
 a previous deployment. Reverting is a last resort reserved for catastrophic failures where a
 forward fix cannot be produced quickly.
 
 **Why roll-forward works here:**
-- All code is in Git — every deployed state is reproducible from source
+- All code is in Git ï¿½ every deployed state is reproducible from source
 - The multi-environment promotion chain (DEV ? TEST ? UAT ? PROD) catches defects before PROD
-- SUPPORT mirrors PROD — a safe diagnostic environment exists without touching live data
-- All deployment steps are automated and idempotent — redeploying any commit is a pipeline run
+- SUPPORT mirrors PROD ï¿½ a safe diagnostic environment exists without touching live data
+- All deployment steps are automated and idempotent ï¿½ redeploying any commit is a pipeline run
 
 ### Branch Model
 
 ```
-main        — always reflects what is currently deployed to PROD
-dev         — long-running integration branch; all development and hotfixes land here first
+main        ï¿½ always reflects what is currently deployed to PROD
+dev         ï¿½ long-running integration branch; all development and hotfixes land here first
 
-feature/*   — short-lived branches off dev, merged to dev when ready
-hotfix/*    — short-lived branches off dev for urgent fixes (optional; can also commit directly to dev)
+feature/*   ï¿½ short-lived branches off dev, merged to dev when ready
+hotfix/*    ï¿½ short-lived branches off dev for urgent fixes (optional; can also commit directly to dev)
 ```
 
 **`main` is never directly committed to.** It is only updated by merging `dev` after a successful
@@ -550,7 +554,7 @@ PROD deployment, to keep it in sync with what is live.
 
 ```
 dev  --? DEV pipeline  --? TEST pipeline  --? UAT pipeline  --? PROD pipeline
-                                                                        ¦
+                                                                        ï¿½
                                                                         ?
                                                                merge dev ? main
                                                           (main now mirrors PROD)
@@ -563,15 +567,15 @@ Promotion to the next environment is a manual approval gate in ADO.
 
 When a defect is found in PROD:
 
-1. **Fix is committed to `dev`** — the same integration branch used for all development
-2. **Pipeline is run from `dev`** — promotes through DEV ? TEST ? UAT ? PROD as normal
+1. **Fix is committed to `dev`** ï¿½ the same integration branch used for all development
+2. **Pipeline is run from `dev`** ï¿½ promotes through DEV ? TEST ? UAT ? PROD as normal
    - UAT gate can be fast-tracked if the fix is low-risk and urgency is high
    - SUPPORT environment can be used to verify the fix against a PROD-mirror before UAT if needed
-3. **After successful PROD deployment** — merge `dev` ? `main` to keep `main` in sync
+3. **After successful PROD deployment** ï¿½ merge `dev` ? `main` to keep `main` in sync
 
 ```
 dev (with fix)  --? DEV  --? TEST  --? UAT (fast-track ok)  --? PROD
-                                                                     ¦
+                                                                     ï¿½
                                                                      ?
                                                             merge dev ? main
 ```
@@ -584,7 +588,7 @@ same schedule. Use it to:
 - Investigate data quality issues against PROD-equivalent data
 - Optionally verify a hotfix before promoting to UAT (no restriction, but not the standard path)
 
-SUPPORT is **never** the target of a feature deployment — only the nightly refresh pipeline runs
+SUPPORT is **never** the target of a feature deployment ï¿½ only the nightly refresh pipeline runs
 against it.
 
 ### Emergency Rollback (Last Resort)
@@ -595,18 +599,18 @@ Git-tracked source, "rollback" means re-running the pipeline against the last kn
 **To redeploy a previous version:**
 1. Identify the last good commit SHA or release tag in ADO
 2. Trigger the pipeline manually, pointing it at that commit
-3. The pipeline is idempotent — redeploying a previous state is safe
+3. The pipeline is idempotent ï¿½ redeploying a previous state is safe
 
 **Per-component notes:**
 
 | Component | "Rollback" mechanism | Notes |
 |---|---|---|
-| **SQL DW (DACPAC)** | Re-deploy previous `.dacpac` built from last good commit | DACPAC is forward-only by default — no down scripts. SqlPackage will apply the diff between current schema and previous schema. Destructive changes (dropped columns) require explicit `--p:BlockOnPossibleDataLoss=false`. |
-| **SSAS Tabular model** | Re-deploy previous TMDL JSON via TE2 CLI against PROD AS instance | Git-tracked TMDL files are the source of truth — no `.abf` backup required. TE2 deploy overwrites the model. |
-| **SSIS packages** | Re-deploy previous `.ispac` via ISDeploymentWizard | SSIS catalog stores the active version — re-deployment replaces it. |
-| **PBIRS reports** | Re-deploy previous `.pbix` via PBIRS REST API | The REST API upload overwrites the report. Previous versions are not retained by PBIRS natively — Git is the version store. |
+| **SQL DW (DACPAC)** | Re-deploy previous `.dacpac` built from last good commit | DACPAC is forward-only by default ï¿½ no down scripts. SqlPackage will apply the diff between current schema and previous schema. Destructive changes (dropped columns) require explicit `--p:BlockOnPossibleDataLoss=false`. |
+| **SSAS Tabular model** | Re-deploy previous TMDL JSON via TE2 CLI against PROD AS instance | Git-tracked TMDL files are the source of truth ï¿½ no `.abf` backup required. TE2 deploy overwrites the model. |
+| **SSIS packages** | Re-deploy previous `.ispac` via ISDeploymentWizard | SSIS catalog stores the active version ï¿½ re-deployment replaces it. |
+| **PBIRS reports** | Re-deploy previous `.pbix` via PBIRS REST API | The REST API upload overwrites the report. Previous versions are not retained by PBIRS natively ï¿½ Git is the version store. |
 
 > **Note on DACPAC data-loss risk:** If the bad PROD deployment included a destructive schema change
 > (e.g., a column drop that removed data), a DACPAC rollback cannot recover that data. In this case,
 > roll-forward with a schema fix is the only viable path. This scenario is mitigated by the
-> UAT testing gate — destructive changes should never reach PROD untested.
+> UAT testing gate ï¿½ destructive changes should never reach PROD untested.
