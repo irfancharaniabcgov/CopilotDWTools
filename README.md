@@ -55,7 +55,7 @@ skills/
 
 ### DW & SSAS Tabular Architect (`ssas-tabular-dw-architect.agent.md`)
 
-**Model:** Claude Sonnet (with GPT-5.4 self-review gate before delivering any output)
+**Model:** Claude Opus 4.7 (with GPT-5.4 self-review gate before delivering any output)
 
 Primary review and build agent. Connects to live SQL Server databases via the MS SQL extension,
 reads `.bim`/TMDL files, and works from user-provided DDL. All output is pipeline-executable —
@@ -82,18 +82,39 @@ is confirmed and unambiguous.
 Coordinates with `ssas-tabular-dw-architect` for source schema validation, then invokes
 Modes H–N for artifact generation.
 
-**8 interview phases (in order):**
+**9 interview phases (in order):**
 
 | Phase | Focus |
 |---|---|
 | 1 | Business Context |
 | 2 | Source Systems |
 | 3 | Grain (gate — must be confirmed before continuing) |
-| 4 | Measures |
-| 5 | Dimensions |
-| 6 | Time Intelligence |
-| 7 | Sensitivity / Data Classification |
-| 8 | Refresh / Scheduling |
+| 4 | Business Definitions |
+| 5 | Measures & KPIs |
+| 6 | Dimensions & Filters |
+| [Bus Matrix gate] | Mandatory sign-off before Phase 7 |
+| 7 | Time Intelligence |
+| 8 | Data Sensitivity & Access |
+| 9 | Refresh & Performance |
+
+---
+
+### DB Documenter (`db-documenter.agent.md`)
+
+**Model:** Claude Sonnet 4.6 (with GPT-5.4 dual-model review before each per-table batch and before convention blankets)
+
+Discovery-driven documentation agent. Surfaces and writes useful inline documentation — extended properties on SQL Server objects, TMDL descriptions on SSAS Tabular objects — collaboratively with the user. Skips self-evident columns; documents what is unusual, ambiguous, or surprising. Also surfaces design smells as non-blocking findings.
+
+**Modes:**
+
+| Mode | Scope |
+|---|---|
+| D0 | Database / schema level (always runs first) |
+| D1 | Source SQL Server database — `MS_Description` extended properties via SSDT post-deploy scripts |
+| D2 | Data warehouse — full org extended property set (`MS_Description`, `BusinessOwner`, `Grain`, `RefreshFrequency`, etc.) |
+| D3 | SSAS Tabular model — TMDL `description` fields + `BusinessDescription` annotations on relationships |
+
+**Can be invoked standalone or by other agents** — `ssas-tabular-dw-architect` (Mode A < 80% coverage) and `dw-report-designer` (post-Mode N build handoff) both hand off to DB Documenter automatically.
 
 ---
 
