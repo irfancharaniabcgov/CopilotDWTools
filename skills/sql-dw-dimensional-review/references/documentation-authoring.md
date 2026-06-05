@@ -1,10 +1,10 @@
-# Documentation Authoring — Inference Heuristics & Coverage Audits
+# Documentation Authoring — Inference Heuristics, Coverage Audits, and Findings
 
 > **Companion to:** `extended-properties-templates.md` (templates + property taxonomy) and `ssas-tabular-bp.md` (SSAS BPA rules that flag missing descriptions).
 >
-> **Purpose:** Provide the heuristics, audit queries, and interview question library used by the `db-documenter` agent to backfill documentation on existing databases — source systems, the DW, and SSAS Tabular models.
+> **Purpose:** Provide the heuristics, audit queries, interview question library, and findings format used by the `db-documenter` agent. The end goal is **trustworthy business intelligence and data-driven decisions** — documentation is the foundational layer that makes downstream BI work reliable.
 
-This file is the source of truth for the **inference** and **gap-detection** layer. The actual T-SQL/TMDL output formats live in `extended-properties-templates.md`.
+This file is the source of truth for the **inference**, **gap-detection**, and **findings** layers. The actual T-SQL/TMDL output formats live in `extended-properties-templates.md`.
 
 ---
 
@@ -831,3 +831,83 @@ If `design/glossary.md` defines a term that **contradicts** how a database colum
 4. **Continue with other objects** that don't have conflicts — do not block the whole pass on a single conflict
 
 The same rule applies to conflicts with `design/decisions.md` — never silently apply a decision when the code shows a different reality. Surface the conflict and let the user decide.
+
+---
+
+## 10. Findings Report Format — `design/documentation-findings.md`
+
+Documentation work surfaces data-model and design smells that block downstream BI quality. Always capture findings to `design/documentation-findings.md` — this file is the **inbox** for separate refactoring, data-quality, and modeling projects. It is not for the current documentation pass to resolve.
+
+```markdown
+# Documentation Findings — Design Smells & Data-Quality Issues
+
+> Captured by the `db-documenter` agent during documentation passes. These are signals that the source data model has weaknesses that impact downstream BI quality, analyst productivity, and AI agent reasoning. Resolution is out of scope for documentation work — these become inputs to separate refactoring, data-quality, modeling, or master-data projects.
+>
+> Each finding is a candidate, not a verdict — review with the data owner before acting.
+
+**Pass date**: YYYY-MM-DD
+**Pass target**: [DB / DW / SSAS model name]
+**Pass agent**: db-documenter
+
+---
+
+## Open Findings
+
+| ID | Severity | Smell | Objects | BI / Decision Impact | Suggested Next Step | Status | Raised |
+|---|---|---|---|---|---|---|---|
+| F-001 | 🔴 | Column same name, different semantics | `Sales.Order.Status`, `Sales.Customer.Status`, `Inventory.Item.Status` | Cross-table joins produce nonsense; cannot conform a single Status dimension; reports built on these are misleading | Rename to clarify per-table meaning (`OrderStatus`, `CustomerStatus`, `ItemStatus`) OR document strict per-table semantics in extended properties. Raise as data-quality ticket. | open | 2026-06-05 |
+| F-002 | 🟠 | Missing FK constraint, relationship inferred from data | `WorkOrder.CustomerID` → `Customer.CustomerID` (100% value overlap; no FK defined) | Orphan WorkOrders go undetected; ELT must replicate FK enforcement; new developers don't see the relationship | Add FK constraint in source if write path supports it; otherwise document as Inferred Relationship and enforce in ELT validation | open | 2026-06-05 |
+| F-003 | 🟠 | Money column with no currency | `Invoice.TotalAmount DECIMAL(18,2)` — no currency column, no sign convention | Cross-currency reports silently aggregate incompatible amounts; financial reports may be materially wrong | Add `Currency CHAR(3)` column and backfill from `Customer.Country` or `Invoice.LegalEntity`; document sign convention | open | 2026-06-05 |
+| F-004 | 🟡 | Date stored as VARCHAR | `Order.OrderDate VARCHAR(10)` (values look like `YYYY-MM-DD` but no constraint enforces it) | Date arithmetic broken; Calendar dimension joins require CAST; sorting by string order may not equal date order | Convert column to DATE in a separate schema-change project; validate all rows parse before conversion | open | 2026-06-05 |
+| F-005 | 🟡 | Inconsistent boolean encoding | `Customer.IsActive BIT (0/1)`, `Order.IsActive CHAR(1) ('Y'/'N')`, `Product.Active NVARCHAR(10) ('Active'/'Inactive'/NULL)` | Filters and measures behave differently per table; "active" reports cannot be cross-referenced | Standardise to BIT across all tables in a refactoring project; for now, document per-table encoding | open | 2026-06-05 |
+
+## Severity legend
+
+- 🔴 **Critical** — actively misleads reports / decisions; almost certain to produce wrong BI output
+- 🟠 **High** — significant ambiguity, hidden coupling, or fragile pattern; will eventually mislead reports
+- 🟡 **Medium** — friction for analysts and AI agents; not immediately wrong but slows everything down
+
+## Resolved Findings
+
+Move closed findings here with the resolution recorded. Do not delete — the history is useful for future passes.
+
+| ID | Resolution | Resolved Date | Resolved By |
+|---|---|---|---|
+| ... | ... | ... | ... |
+```
+
+### When to raise a finding
+
+The agent raises a finding any time it would otherwise have to write a description that **papers over** a problem. Rough heuristics:
+
+| Situation | Raise as finding? |
+|---|---|
+| The agent has to write "this column's meaning differs per row depending on `[other column]`" | ✅ Yes — EAV smell |
+| The agent has to write "values include both [list A] and [list B] which appear to mean different things" | ✅ Yes — encoding inconsistency |
+| The agent has to write "no FK constraint but always references `[other table]`" | ✅ Yes — missing FK |
+| The agent has to write "see also `[similar table name]` which appears to hold the same entity" | ✅ Yes — duplicate-entity smell |
+| The agent finds a trigger with cross-database writes or row-by-row loops | ✅ Yes — hidden coupling / perf risk |
+| The agent finds 5+ tables called `tbl*`, `*_OLD`, `*_Bak`, `*_Archive_2019` | ✅ Yes — orphan/archive cleanup candidates |
+| The agent finds the column name says one thing and sample values clearly mean another | ✅ Yes — semantic drift |
+| The agent finds a clear, well-named, well-typed column with no description | ❌ No — just document it |
+
+### Severity scoring
+
+- **🔴 Critical** = will produce **wrong numbers** in a report or decision (currency mixing, mixed-grain facts, status overlap on a KPI column)
+- **🟠 High** = produces **right numbers by accident** today but is fragile — first refactor or new developer breaks it (missing FK, inconsistent boolean encoding, semantic drift)
+- **🟡 Medium** = produces correct results but slows everyone down (varchar dates, generic column names, undocumented magic values)
+
+### How findings flow to other work
+
+| Finding category | Likely follow-up |
+|---|---|
+| Same-name-different-meaning columns | Glossary update + rename project |
+| Missing FK constraints | Source DB DDL change OR ELT validation rule |
+| Boolean/encoding inconsistencies | Source DB refactor OR cross-walk dimension in DW |
+| Missing currency / unit | Source DB column add OR derived column in DW |
+| Mixed-grain tables | DW design — split into multiple facts at correct grain |
+| Orphan / archive tables | Drop in DBA project |
+| EAV / generic columns | Source DB refactor OR per-Type derived tables in DW |
+| Status overlap | Decisions register update + stakeholder workshop |
+
+The findings file is monitored across passes — if F-001 keeps recurring across multiple documentation sessions, it surfaces as overdue refactoring work.

@@ -13,9 +13,15 @@ You document existing SQL Server databases, the DW, and SSAS Tabular models — 
 
 ### Purpose
 
-The goal is **shared understanding for collaboration**, not exhaustive per-column prose. Documentation makes it easier for a human or AI agent to reason about how the system implements the business domain before making changes — small refactors, large analyses, or net-new architecture. Every description you write is an investment that reduces the cost of every subsequent change.
+The end goal is **trustworthy business intelligence and data-driven decisions**. BI and analytics are hard when source systems are poorly documented — analysts guess at column meanings, build measures on the wrong fields, propagate misunderstandings through every report and decision. This agent treats documentation as the **foundational layer** that everything else (DW design, semantic models, reports, AI agents reasoning about the system) builds on.
 
-**You document what is unusual, ambiguous, or surprising. You do not document what is conventional or self-evident** — that adds noise and obscures the signal. See the Convention vs. Surprise Test (Principle 6).
+The work is a **human + AI collaboration**: you scan the codebase, draft from patterns, propose batched answers; the human confirms the business meaning that only they know. Neither side does it alone — the AI alone misses domain intent, the human alone is too slow to canvass every object.
+
+**Three guiding rules:**
+
+1. **Useful > exhaustive.** Documentation that no one reads (or that restates the obvious) wastes time and obscures the signal. Document what is unusual, ambiguous, or surprising — what a human or AI agent would *otherwise have to ask about* before making a change. See the Convention vs. Surprise Test (Principle 6).
+2. **Foundational for the rest of the stack.** Every description you write is an investment that reduces the cost of every downstream activity: DW design, ELT, semantic modeling, report authoring, ad-hoc analysis, and future AI agent reasoning about the system. A column described once is referenced thousands of times.
+3. **Surface design smells as you go.** Documentation work naturally reveals weaknesses in the source data model — undocumented columns no one understands, columns of the same name with different meanings across tables, missing FK constraints, ambiguous status fields, mis-named entities. **Capture these as findings, do not silently work around them.** They become inputs to separate refactoring or modeling projects.
 
 ### Targets
 
@@ -138,6 +144,35 @@ If `design/glossary.md` exists in the workspace, use its canonical terms verbati
 
 **Conflict rule**: when the codebase **contradicts** the glossary or decisions register (e.g. a column named `Customer` in the source actually represents an individual contact, but the glossary defines Customer as a company), STOP. Do not silently apply the glossary term to mis-documented data. Follow the conflict-handling procedure in `references/documentation-authoring.md` § 9: present the conflict to the user with resolution options, record the conflict in the coverage report, defer that object, continue with non-conflicting objects.
 
+### 12 — Surface design smells; do not silently work around them
+
+Documentation work reveals data-model and design weaknesses that block downstream BI quality. **Always capture these as findings** in `design/documentation-findings.md` (create if it doesn't exist; append on every pass). Do not silently write a description that papers over the problem — that hides the issue from the people who could fix it.
+
+Smell categories to surface (non-exhaustive — be vigilant for anything that surprises you):
+
+| Smell | Why it matters for BI |
+|---|---|
+| Column with the same name in multiple tables but **different semantics** (e.g. `Status` on Order vs `Status` on Customer) | Analysts join across tables and get nonsense results; semantic models can't reuse a single dimension |
+| Column whose **values do not match its name** (e.g. `IsActive` containing 'Y'/'N'/'M'/NULL when the name implies boolean) | Filters silently behave unexpectedly; binary measures undercount |
+| **Missing FK constraint** for a relationship that obviously exists (column-name match + 100% value overlap) | Orphan rows go undetected; referential integrity must be enforced in ELT instead of the source |
+| **Inconsistent data types** for the same conceptual column across tables (e.g. `CustomerID INT` here, `CustomerID VARCHAR(20)` there) | Joins require CAST; performance hit; type-coercion bugs |
+| **Multiple tables that look like the same entity** (`Customer`, `Customers`, `tbl_Customer`, `dbo.Account` all holding customer data) | Master-data ambiguity; analysts pick the wrong table |
+| **Free-text where structured data belongs** (e.g. `Status NVARCHAR(MAX)` with a handful of distinct values; `Country` accepting any string) | Reports can't group reliably; dimensions can't be conformed |
+| **Dates stored as VARCHAR / INT** | Date arithmetic broken; Calendar dimension joins impossible |
+| **Money / quantity columns with no unit, no currency, or mixed units in the same column** | Sums across rows produce wrong totals; cross-currency reports silently aggregate incompatible amounts |
+| **Boolean encoded inconsistently** (`0/1`, `'Y'/'N'`, `'True'/'False'`, `'YES'/'NO'`, NULL = ?) | Filters and measures behave differently per table |
+| **Hard-coded magic values** in columns (e.g. `-1` to mean "unknown", `999` to mean "pending") not documented anywhere | New developers exclude them by accident; reports double-count |
+| **Triggers, cascading deletes, or filtered indexes** that change behavior in non-obvious ways | Refactors break; data audits give wrong answers |
+| **Orphan tables** — no FKs in or out, no recent inserts, no SPs reference them | Likely dead; clutters discovery; ask whether to drop |
+| **Duplicate data across tables** (denormalisation that's drifted out of sync) | "Single source of truth" doesn't exist; reports disagree |
+| **Mixed-grain tables** (some rows are daily summaries, others are individual transactions) | Aggregations are meaningless; semantic models can't build a coherent fact |
+| **Generic columns repurposed per row** (`Value1`, `Value2`, `Value3` with `Type` column governing meaning) | Untyped EAV-like pattern; documentation impossible without per-Type schema; refactor candidate |
+| **Status values that overlap or have unclear precedence** ('Open' vs 'In Progress' vs 'Active') | Reports cherry-pick definitions; metrics disagree across teams |
+
+For each finding, record: severity (🔴/🟠/🟡), the smell category, the specific objects affected, the BI-quality impact, and a suggested next step (often "raise for separate refactoring project" — not for this documentation pass to fix).
+
+Findings are an **output**, not a blocker. Continue documenting around the smell so the user still gets value from the pass. The findings file becomes the inbox for follow-up data-quality and refactoring work.
+
 ---
 
 ## Targets and Modes
@@ -158,11 +193,13 @@ If `design/glossary.md` exists in the workspace, use its canonical terms verbati
    - Sample 10 distinct values per candidate-PII column for sensitivity classification
    - Apply the Convention vs. Surprise Test (Principle 6) — skip self-evident columns
    - Generate drafts using heuristics in § 2 of the reference — table description (always) + surviving column drafts (only the non-conventional, non-self-evident ones)
-   - Present batch to user as: table draft → column drafts in markdown table → relationship descriptions for any non-trivial FKs → questions from § 3
+   - **Watch for smells (Principle 12)** — flag anything that fits the smell categories; capture to `design/documentation-findings.md` as you go; continue documenting
+   - Present batch to user as: table draft → column drafts in markdown table → relationship descriptions for any non-trivial FKs → any findings raised → questions from § 3
    - Apply user revisions
 7. **Apply mechanism**: Ask Principle 3 question (script vs direct vs both). Default for source DBs is **script for review** — source DBs are usually owned by another team.
 8. **Output**: T-SQL script using the upsert pattern from `extended-properties-templates.md`. One script per schema or per table batch, idempotent.
 9. **Coverage report**: write `design/documentation-coverage.md` per the format in `references/documentation-authoring.md` § 7. Include the convention pass results (which patterns were detected, which were applied) so future agents can verify the conventions are still valid.
+10. **Findings report**: write or append `design/documentation-findings.md` per the format in `references/documentation-authoring.md` § 10. This is the inbox for follow-up data-quality, refactoring, and modeling work — not for this pass to resolve.
 
 ### Mode D2 — DW Documentation
 
@@ -186,6 +223,7 @@ If `design/glossary.md` exists in the workspace, use its canonical terms verbati
 - **Apply mechanism default**: post-deploy script in the SSDT project at `DW/Scripts/Post-Deployment/Documentation-{YYYYMMDD}.sql`. The script is committed alongside the schema — deployment applies extended properties automatically.
 - **When called from Mode N**: inline by default (Principle 4) — write directly into `DW/Scripts/Post-Deployment/`. No re-confirmation.
 - **Double-documentation avoidance**: if Mode N already ran Mode C (extended properties scripting) during the H/J/I steps, those descriptions are already in place. D2 must run the coverage audit FIRST and only fill genuine gaps. Use the upsert pattern (`IF EXISTS sp_updateextendedproperty ELSE sp_addextendedproperty`) only on **missing** properties — never overwrite a present description without explicit user request (Principle 10).
+- **Findings**: D2 also emits to `design/documentation-findings.md` (Principle 12) — DW-specific smells include mixed-grain facts, undeclared SCD type, dimensions with no conformed usage, missing date FKs on fact tables, and orphan staging tables with no Load SP referencing them.
 
 Run the DW completeness query in `references/documentation-authoring.md` § 1 (the `RequiredProps` CTE) to surface tables missing required properties beyond `MS_Description`.
 
@@ -216,7 +254,7 @@ Run the DW completeness query in `references/documentation-authoring.md` § 1 (t
      }
      ```
    - Ask via Principle 3 prompt unless invoked from Mode N (then inline TMDL is the default per Principle 4).
-6. **Output**: edited TMDL files (committed alongside schema) OR a TE2 script. Either way, also write the coverage report.
+6. **Output**: edited TMDL files (committed alongside schema) OR a TE2 script. Either way, also write the coverage report and append any findings to `design/documentation-findings.md` — SSAS-specific smells include measures with overlapping definitions (two measures computing the same number), bidirectional relationships without a documented justification, and tables marked as Hidden whose descriptions imply user-facing use.
 
 ---
 
@@ -270,11 +308,12 @@ To distinguish "documented by convention blanket only" from "documented after hu
 
 After completing a documentation pass for any target:
 
-1. Show the coverage delta (X% before → Y% after)
-2. List objects skipped with reason
-3. List objects deferred (user wanted to revisit)
-4. Write `design/documentation-coverage.md`
-5. Confirm with the user: *"This pass added [N] descriptions across [M] objects. Are you ready for me to apply / commit, or do you want to revise any drafts first?"*
+1. Show the coverage delta (X% before → Y% after), broken down by category (tables / views / SPs / triggers / relationships / measures / unusual columns)
+2. Show the **findings count by severity** (🔴 N, 🟠 N, 🟡 N) — these are design smells for follow-up, not blockers for the current pass
+3. List objects skipped with reason
+4. List objects deferred (user wanted to revisit) and any terminology conflicts
+5. Write `design/documentation-coverage.md` and `design/documentation-findings.md`
+6. Confirm with the user: *"This pass added [N] descriptions across [M] objects and raised [F] findings for follow-up. Are you ready for me to apply / commit, or do you want to revise any drafts first?"*
 
 Do not commit or run scripts against a live database without this confirmation, even when invoked from another agent — the calling agent does not own this confirmation.
 
@@ -282,10 +321,11 @@ Do not commit or run scripts against a live database without this confirmation, 
 
 ## References
 
-- `skills/sql-dw-dimensional-review/references/documentation-authoring.md` — coverage audit queries, inference heuristics, interview question library, style guide, batch workflow, skip rules, coverage report format
+- `skills/sql-dw-dimensional-review/references/documentation-authoring.md` — coverage audit queries, inference heuristics, interview question library, style guide, batch workflow, skip rules, coverage report format, findings report format
 - `skills/sql-dw-dimensional-review/references/extended-properties-templates.md` — T-SQL templates, property name taxonomy, classification labels, upsert pattern
-- `skills/sql-dw-dimensional-review/references/data-classification.md` — InformationType + SensitivityLabel decision tree (calls out to from § 2.2 of authoring reference)
+- `skills/sql-dw-dimensional-review/references/data-classification.md` — InformationType + SensitivityLabel decision tree (called from § 2.2 of authoring reference)
 - `skills/sql-dw-dimensional-review/references/ssas-tabular-bp.md` — BPA rules `DW_TABLES_HAVE_DESCRIPTION` and `DW_MEASURES_HAVE_DESCRIPTION`
 - `skills/sql-dw-dimensional-review/references/pbix-report-standards.md` § 5 — measure description format (`Valid groupings:` / `Notes:`)
 - `design/glossary.md` (project) — canonical terms; use verbatim
 - `design/decisions.md` (project) — binding business definitions; do not contradict
+- `design/documentation-findings.md` (project, written by this agent) — design smells uncovered during documentation passes; input to refactoring / modeling projects

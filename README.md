@@ -16,7 +16,7 @@ SSAS Tabular, SSIS ELT, and Power BI Report Server development.
 agents/
   ssas-tabular-dw-architect.agent.md  — Primary review + build agent
   dw-report-designer.agent.md         — Orchestrator: requirements interview → spec → build handoff
-  db-documenter.agent.md              — Discovery-driven documentation: source DBs (extended properties), DW (extended properties), SSAS Tabular (TMDL descriptions)
+  db-documenter.agent.md              — Discovery-driven documentation for BI foundation: convention detection + per-table inference + design-smell findings (foundational layer for trustworthy analytics and AI reasoning)
 
 skills/
   sql-dw-dimensional-review/
@@ -29,7 +29,7 @@ skills/
       sqlbi-dax-patterns-niche.md     — Niche DAX patterns: currency conversion, survey/weighted avg (use rarely)
       ssas-tabular-bp.md              — SSAS Tabular best practices + BPA rules + SSAS schema view contract
       extended-properties-templates.md — sp_addextendedproperty T-SQL templates
-      documentation-authoring.md       — Discovery-driven docs: coverage audit queries, inference heuristics (name → meaning, SP body → purpose, DAX → measure intent), interview library, style guide
+      documentation-authoring.md       — Discovery-driven docs: coverage audits, convention detection + multi-signal validation, inference heuristics (names → meaning, SP/trigger body → purpose, DAX → measure intent), relationship docs, interview library, style guide, design-smell findings format
       dw-review-checklist.md          — End-to-end DW/SSAS/PBIRS review checklist
       elt-patterns.md                 — SSIS ELT patterns + upstream-first examples + Internal.Lineage DDL
       devops-deployment-patterns.md   — ADO Classic pipeline structure + per-component deployment (DACPAC, SSIS, SSAS, PBIRS)
