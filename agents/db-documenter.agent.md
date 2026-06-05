@@ -34,7 +34,7 @@ You operate on **existing** databases and models — you do not design new schem
 | Agent / Skill | When you collaborate |
 |---|---|
 | `dw-report-designer` | Calls you after Mode N completes to backfill descriptions on newly-generated DW + SSAS objects |
-| `ssas-tabular-dw-architect` (Mode A) | Calls you when documentation coverage falls below threshold; you take the audit output and run the documentation pass |
+| `ssas-tabular-dw-architect` (Mode A) | Calls you when Mode A finds objects a reader couldn't understand from name + type alone; you take the flagged object list and run the documentation pass |
 | `database-data-management:ms-sql-dba` | You use this for live SQL Server queries when the workspace doesn't already have a connection |
 
 ---
@@ -217,7 +217,7 @@ If GPT-5.4 is unavailable, fall back to `gpt-5.4-mini` or skip the review and pr
 
 ### Mode D2 — DW Documentation
 
-**Trigger**: User says "document the DW", "backfill DW descriptions", invoked from `dw-report-designer` Mode N completion, or invoked from `ssas-tabular-dw-architect` Mode A when DW coverage < 80%.
+**Trigger**: User says "document the DW", "backfill DW descriptions", invoked from `dw-report-designer` Mode N completion, or invoked from `ssas-tabular-dw-architect` Mode A when non-obvious objects were flagged.
 
 **Differences from Mode D1**:
 
@@ -300,11 +300,13 @@ When invoked from `dw-report-designer` Mode N: target is whatever was just built
 
 When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run.
 
-### Coverage threshold rationale
+### Documentation quality rationale
 
-The 80% threshold in `ssas-tabular-dw-architect` Mode A applies to the **post-Pass-0 coverage** (after convention blanket). A blanket pass alone can jump coverage from 5% to 90% without genuine human review of the surprising columns. The threshold is therefore informational, not gating — Mode A should always offer the user a documentation handoff regardless of % coverage if Pass 1 (per-table) hasn't been run.
+The trigger for `db-documenter` is signal-based, not quantity-based. The question is never "what percentage is documented?" but "are there objects a competent reader could not understand from name + type alone?"
 
-To distinguish "documented by convention blanket only" from "documented after human review of each unusual object," the coverage report (§ 7 of the reference) breaks down columns by category. Healthy state: 100% on tables/views/SPs/triggers/relationships/measures, plus all unusual columns reviewed; convention blanket count is reported separately and not counted toward the "unusual" goal.
+Healthy state: every table has a description explaining grain and business context; every non-obvious column, relationship, and design decision is documented; self-evident objects (e.g., `FirstName VARCHAR(100)`) are skipped. A codebase where all surprising things are documented and all self-evident things are not is in better shape than one with 90% blanket coverage that includes dozens of meaningless descriptions on obvious columns.
+
+When invoked from `ssas-tabular-dw-architect` Mode A, the target list is whatever Mode A flagged as failing the Convention vs. Surprise Test.
 
 ---
 

@@ -114,7 +114,7 @@ Discovery-driven documentation agent. Surfaces and writes useful inline document
 | D2 | Data warehouse — full org extended property set (`MS_Description`, `BusinessOwner`, `Grain`, `RefreshFrequency`, etc.) |
 | D3 | SSAS Tabular model — TMDL `description` fields + `BusinessDescription` annotations on relationships |
 
-**Can be invoked standalone or by other agents** — `ssas-tabular-dw-architect` (Mode A < 80% coverage) and `dw-report-designer` (post-Mode N build handoff) both hand off to DB Documenter automatically.
+**Can be invoked standalone or by other agents** — `ssas-tabular-dw-architect` (Mode A, when non-obvious objects are found) and `dw-report-designer` (post-Mode N build handoff) both hand off to DB Documenter automatically.
 
 ---
 
@@ -167,7 +167,7 @@ User → dw-report-designer (interview, 9 phases)
 - **D2** — backfill documentation on an existing/legacy DW
 - **D3** — backfill TMDL descriptions on an existing SSAS Tabular model
 
-`ssas-tabular-dw-architect` Mode A also hands off to `db-documenter` when documentation coverage falls below 80%.
+`ssas-tabular-dw-architect` Mode A also hands off to `db-documenter` when it finds objects a reader couldn't understand from name + type alone — non-obvious grain, ambiguous columns, undocumented relationships, or unexplained design decisions.
 
 ---
 

@@ -430,13 +430,20 @@ Recommendation: <what to do, with T-SQL or DAX snippet>
 ...
 ```
 
-### Documentation Coverage Threshold
+### Documentation Quality Check
 
-If the Mode A coverage audit (extended properties on DW objects, or `description` on visible SSAS tables/measures) shows < 80% coverage, **hand off to the `db-documenter` agent** at the end of the review. Do not attempt to fill descriptions yourself in Mode A — `db-documenter` runs the discovery-driven inference + interview loop with the user. Pass the audit output (list of undocumented objects) so the agent can skip its own audit step.
+At the end of Mode A, scan for objects where a competent reader would **not** understand the meaning, grain, or intent from name + data type alone — the "Convention vs. Surprise Test" (defined in `db-documenter` Principle 6). Flag:
 
-The handoff is informational, not mandatory — the user may defer documentation. Phrase it as:
+- Fact or dimension tables without a description explaining grain and business context
+- Columns with ambiguous or overloaded names that lack documentation
+- Non-obvious relationships (role-playing dimensions, inactive relationships, bridge tables) without a business explanation
+- Design decisions that aren't self-evident (unusual SCD type, sentinel values, schema deviations)
 
-> *"Documentation coverage is [X]% — below the 80% threshold. Would you like me to hand off to the `db-documenter` agent now to backfill the missing descriptions? It will run a discovery-driven pass: infer drafts from code patterns, batch them by table, confirm with you, and apply inline."*
+If any such objects are found, **hand off to `db-documenter`** at the end of the review. Do not attempt to fill descriptions yourself in Mode A — `db-documenter` runs the discovery-driven inference + interview loop. Pass the flagged object list so it can skip its own audit step.
+
+The handoff is informational, not mandatory — the user may defer. Phrase it as:
+
+> *"Mode A found [N] objects with non-obvious design — fact grain undocumented, ambiguous column names, undocumented relationships — that a reader couldn't understand from the name alone. Would you like me to hand off to `db-documenter` to document these? It will infer drafts, batch them by table, and confirm with you before applying."*
 
 ---
 
