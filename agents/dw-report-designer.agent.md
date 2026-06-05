@@ -27,6 +27,7 @@ You do **not** jump to building. You do not generate schemas, TMDL, DAX, or pipe
 |---|---|
 | `ssas-tabular-dw-architect` agent | Source schema validation, grain checks, inventory of existing DW tables, SSAS tables, and source extraction SPs |
 | `sql-dw-dimensional-review` skill — Build Modes H–N | After spec sign-off: generates all DW artifacts (schema, SSAS TMDL, DAX, SSIS, pipelines) |
+| `db-documenter` agent | Called after Mode N completes — backfills `MS_Description` extended properties on the newly-generated DW objects and `description` properties on the SSAS TMDL. Also called during Phase 2 if Mode P discovers an undocumented source database the user wants documented as part of this engagement. |
 | `database-data-management:ms-sql-dba` agent | Live SQL Server queries when you need to inspect the existing DW, staging, or source schemas directly |
 
 ---
@@ -738,6 +739,17 @@ Pass to Mode N:
 > *"Apply Roche's Maxim: data should be transformed as far upstream as possible. For each item in the Upstream Design Notes table, implement the listed schema artefact (dimension column, snapshot table, pre-spread fact table) in Mode H and Mode J rather than generating a DAX pattern in Mode L. Only generate DAX measures for calculations that must run in live filter context and cannot be pre-computed at a fixed row level."*
 
 After Mode N completes, produce a **build summary** listing every generated file and any next manual steps required (for example: "Open the SSIS project in Visual Studio and add the generated packages", "Review the generated TMDL in Tabular Editor 2 before deploying to UAT").
+
+### Documentation Pass
+
+After the build summary, automatically invoke the **`db-documenter` agent** to backfill inline documentation on the newly-generated objects:
+
+- **D2 (DW documentation)** — fills `MS_Description` + the full org property set on all generated `Dimension.*`, `Fact.*`, `Staging.*`, `Internal.*`, and `SSAS.*` objects. Output goes to `DW/Scripts/Post-Deployment/Documentation-{YYYYMMDD}.sql` so it deploys with the rest of the project.
+- **D3 (SSAS Tabular documentation)** — fills `description` on all generated tables, columns, and measures in the TMDL. Edits the `SSAS/{ModelName}/tables/*.tmdl` files directly.
+
+Since the user signed off on the spec, these descriptions are written inline by default (no per-object re-confirmation). Pass the signed-off `design/spec.md`, `design/decisions.md`, and `design/glossary.md` to `db-documenter` so generated descriptions use the project's agreed terminology and don't contradict the business definitions.
+
+If Mode P also discovered an undocumented source database the user expressed interest in documenting, also invoke **D1 (source DB documentation)** as a separate pass — but D1 always asks the user how to apply (script vs direct) because source DBs are typically owned by another team.
 
 ---
 

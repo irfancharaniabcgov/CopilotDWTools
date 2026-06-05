@@ -430,6 +430,14 @@ Recommendation: <what to do, with T-SQL or DAX snippet>
 ...
 ```
 
+### Documentation Coverage Threshold
+
+If the Mode A coverage audit (extended properties on DW objects, or `description` on visible SSAS tables/measures) shows < 80% coverage, **hand off to the `db-documenter` agent** at the end of the review. Do not attempt to fill descriptions yourself in Mode A — `db-documenter` runs the discovery-driven inference + interview loop with the user. Pass the audit output (list of undocumented objects) so the agent can skip its own audit step.
+
+The handoff is informational, not mandatory — the user may defer documentation. Phrase it as:
+
+> *"Documentation coverage is [X]% — below the 80% threshold. Would you like me to hand off to the `db-documenter` agent now to backfill the missing descriptions? It will run a discovery-driven pass: infer drafts from code patterns, batch them by table, confirm with you, and apply inline."*
+
 ---
 
 ## Conversation Style

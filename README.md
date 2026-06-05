@@ -16,6 +16,7 @@ SSAS Tabular, SSIS ELT, and Power BI Report Server development.
 agents/
   ssas-tabular-dw-architect.agent.md  — Primary review + build agent
   dw-report-designer.agent.md         — Orchestrator: requirements interview → spec → build handoff
+  db-documenter.agent.md              — Discovery-driven documentation: source DBs (extended properties), DW (extended properties), SSAS Tabular (TMDL descriptions)
 
 skills/
   sql-dw-dimensional-review/
@@ -28,6 +29,7 @@ skills/
       sqlbi-dax-patterns-niche.md     — Niche DAX patterns: currency conversion, survey/weighted avg (use rarely)
       ssas-tabular-bp.md              — SSAS Tabular best practices + BPA rules + SSAS schema view contract
       extended-properties-templates.md — sp_addextendedproperty T-SQL templates
+      documentation-authoring.md       — Discovery-driven docs: coverage audit queries, inference heuristics (name → meaning, SP body → purpose, DAX → measure intent), interview library, style guide
       dw-review-checklist.md          — End-to-end DW/SSAS/PBIRS review checklist
       elt-patterns.md                 — SSIS ELT patterns + upstream-first examples + Internal.Lineage DDL
       devops-deployment-patterns.md   — ADO Classic pipeline structure + per-component deployment (DACPAC, SSIS, SSAS, PBIRS)
@@ -133,7 +135,18 @@ User → dw-report-designer (interview, 9 phases)
        SKILL.md Modes H–N (artifact generation)
          ↓
        DW DDL + SSAS TMDL + Source SPs + SSIS Config + DAX + Pipeline Config
+         ↓
+       db-documenter (D2 backfills DW extended properties; D3 backfills SSAS TMDL descriptions)
+         ↓
+       Documented, deployable artifacts
 ```
+
+`db-documenter` can also run standalone:
+- **D1** — document an existing source SQL Server database with `MS_Description` extended properties (asks how to apply: script vs direct)
+- **D2** — backfill documentation on an existing/legacy DW
+- **D3** — backfill TMDL descriptions on an existing SSAS Tabular model
+
+`ssas-tabular-dw-architect` Mode A also hands off to `db-documenter` when documentation coverage falls below 80%.
 
 ---
 

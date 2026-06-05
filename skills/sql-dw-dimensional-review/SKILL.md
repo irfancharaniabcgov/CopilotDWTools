@@ -67,6 +67,7 @@ Activate when the user asks to:
 | `references/dax-style-guide.md` | DAX coding standard (naming, formatting, VAR/RETURN, filter functions, upstream-first principle) |
 | `references/dax-studio-workflow.md` | DAX Studio: Server Timings, VertiPaq Analyzer, benchmarking, storage engine query analysis |
 | `references/extended-properties-templates.md` | Generating sp_addextendedproperty scripts; InformationType + SensitivityLabel classification |
+| `references/documentation-authoring.md` | Discovery-driven documentation: coverage audit queries (Q-SRC/Q-DW/Q-SSAS), inference heuristics (name patterns, SP body, DAX expression), interview question library, style guide, batch workflow, skip rules. Used by the `db-documenter` agent. |
 | `references/dw-review-checklist.md` | Structured end-to-end review producing a prioritized findings report |
 | `references/dw-validation-patterns.md` | T-SQL validation queries: orphan facts, unknown members, calendar completeness, reconciliation |
 | `references/dw-physical-design.md` | Index strategy (CIX/NCI/CCI), staging heap pattern, statistics guidance, partitioning (DATE type), physical design checklist |
