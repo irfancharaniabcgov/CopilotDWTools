@@ -55,7 +55,7 @@ skills/
 
 ### DW & SSAS Tabular Architect (`ssas-tabular-dw-architect.agent.md`)
 
-**Model:** Claude Opus 4.7 (with GPT-5.4 self-review gate before delivering any output)
+**Model:** GPT-5.4 (with Claude Opus 4.6 self-review gate before delivering any output)
 
 Primary review and build agent. Connects to live SQL Server databases via the MS SQL extension,
 reads `.bim`/TMDL files, and works from user-provided DDL. All output is pipeline-executable —
@@ -70,7 +70,7 @@ Requires: `ms-mssql.mssql` extension for live database connectivity.
 
 ### DW Report Designer (`dw-report-designer.agent.md`)
 
-**Model:** Claude Opus 4.7 (with GPT-5.5 gap-check run after drafting each interview phase)
+**Model:** GPT-5.5 (with Claude Opus 4.7 gap-check run after drafting each interview phase)
 
 Orchestrates new report and DW development from first conversation to signed-off spec, then
 hands off to build. Does not generate schemas, TMDL, DAX, or pipelines until the user has
