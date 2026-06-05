@@ -107,6 +107,59 @@ WHERE  o.[type] IN ('P', 'FN', 'IF', 'TF')   -- P=SP, FN=scalar fn, IF=inline TV
 ORDER BY s.[name], o.[name];
 ```
 
+### Q-SRC-4 — Source DB: Triggers missing MS_Description
+
+Triggers are invisible side effects. Always include them in the audit.
+
+```sql
+SELECT
+    s.[name] + '.' + parent_o.[name] + '.' + tr.[name]  AS [QualifiedName],
+    CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END
+        + ' ' + STUFF((
+            SELECT ', ' + te.type_desc
+            FROM   sys.trigger_events te
+            WHERE  te.object_id = tr.object_id
+            FOR XML PATH('')), 1, 2, '')              AS [TriggerType],
+    tr.is_disabled                                    AS [IsDisabled],
+    tr.create_date,
+    tr.modify_date
+FROM   sys.triggers tr
+JOIN   sys.objects parent_o ON tr.parent_id = parent_o.object_id
+JOIN   sys.schemas s        ON parent_o.schema_id = s.schema_id
+LEFT JOIN sys.extended_properties ep
+    ON ep.major_id = tr.object_id
+   AND ep.minor_id = 0
+   AND ep.class    = 1
+   AND ep.[name]   = N'MS_Description'
+WHERE  tr.is_ms_shipped = 0
+   AND ep.major_id IS NULL
+ORDER BY s.[name], parent_o.[name], tr.[name];
+```
+
+### Q-SRC-5 — Database-level and schema-level documentation
+
+```sql
+-- Database-level description (level0 = NULL ... no level specified)
+SELECT [name] AS PropertyName, CAST([value] AS NVARCHAR(MAX)) AS PropertyValue
+FROM   sys.extended_properties
+WHERE  class = 0;  -- 0 = database itself
+
+-- Schema-level descriptions
+SELECT s.[name] AS SchemaName,
+       ep.[name] AS PropertyName,
+       CAST(ep.[value] AS NVARCHAR(MAX)) AS PropertyValue
+FROM   sys.schemas s
+LEFT JOIN sys.extended_properties ep
+    ON  ep.class = 3                                 -- 3 = schema
+   AND  ep.major_id = s.schema_id
+   AND  ep.[name]   = N'MS_Description'
+WHERE  s.[name] NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest', 'dbo', 'db_owner',
+                        'db_accessadmin', 'db_securityadmin', 'db_ddladmin',
+                        'db_backupoperator', 'db_datareader', 'db_datawriter',
+                        'db_denydatareader', 'db_denydatawriter')
+ORDER BY s.[name];
+```
+
 ### Q-DW-1 / Q-DW-2 / Q-DW-3 — DW coverage
 
 Same SQL as Q-SRC-1/2/3 but with the additional WHERE clause restricting schemas to DW conventions:
@@ -198,52 +251,104 @@ WHERE  m.[IsHidden]   = FALSE
 
 > **Documentation purpose** — every description is an investment that reduces the cost of every subsequent change. The goal is shared understanding for human + AI collaboration on the system. Document what is **unusual, ambiguous, or surprising**. Skip what is **conventional or self-evident** — that adds noise and obscures the signal.
 
-For every object that survives the Convention vs. Surprise Test (§ 2.0.2), the agent should produce a **draft description** before asking the user. The user reviews concrete text, not blank fields. Heuristics by object type:
+For every object that survives the Convention vs. Surprise Test (§ 2.0.3), the agent should produce a **draft description** before asking the user. The user reviews concrete text, not blank fields. Heuristics by object type:
 
 ### 2.0 Convention Detection (run BEFORE per-table drafting)
 
 The highest-leverage step in a documentation pass. Find recurring patterns that appear across many tables, confirm each once with the user, and apply a single boilerplate description to every occurrence.
+
+> **Critical safety rule** — name frequency alone is **not** sufficient to confirm a convention. Many generic names (`Name`, `Status`, `Type`, `Code`, `Description`, `Email`, `IsActive`) appear in many tables with **different semantics**. A blanket description applied without further validation will silently corrupt many columns. Use the multi-signal validation (§ 2.0.2 below) before applying any blanket.
 
 #### 2.0.1 Detection queries
 
 **Recurring column names across tables:**
 
 ```sql
--- Columns appearing in >= 30% of tables in the database.
--- Strong signal that the column is an org-wide convention (audit, lineage, soft-delete, etc.)
+-- Columns appearing in a meaningful number of tables, with data-type and nullability variance reported
+-- so the user can spot inconsistent usage. This is a CANDIDATE list — do NOT blanket-apply without
+-- the multi-signal validation in § 2.0.2.
 WITH TableCount AS (
     SELECT COUNT(*) AS TotalTables FROM sys.tables WHERE is_ms_shipped = 0
+),
+ColAgg AS (
+    SELECT
+        c.[name]                                   AS [ColumnName],
+        COUNT(DISTINCT c.object_id)                AS [TableOccurrences],
+        COUNT(DISTINCT TYPE_NAME(c.user_type_id))  AS [DistinctDataTypes],
+        COUNT(DISTINCT c.is_nullable)              AS [DistinctNullability],
+        STRING_AGG(DISTINCT TYPE_NAME(c.user_type_id), ', ') WITHIN GROUP (ORDER BY TYPE_NAME(c.user_type_id))
+                                                   AS [DataTypeList]
+    FROM   sys.columns c
+    JOIN   sys.tables  t ON c.object_id = t.object_id
+    WHERE  t.is_ms_shipped = 0
+    GROUP BY c.[name]
 )
 SELECT
-    c.[name]                            AS [ColumnName],
-    COUNT(DISTINCT c.object_id)         AS [TableOccurrences],
-    (SELECT TotalTables FROM TableCount) AS [TotalTables],
-    CAST(100.0 * COUNT(DISTINCT c.object_id) /
-         NULLIF((SELECT TotalTables FROM TableCount), 0) AS DECIMAL(5,1)) AS [PercentOfTables],
-    -- Sample a single canonical data type to show variation
-    MAX(TYPE_NAME(c.user_type_id))      AS [SampleDataType],
-    MAX(CAST(c.is_nullable AS INT))     AS [AnyNullable]
-FROM   sys.columns c
-JOIN   sys.tables t ON c.object_id = t.object_id
-WHERE  t.is_ms_shipped = 0
-GROUP BY c.[name]
-HAVING COUNT(DISTINCT c.object_id) >= (SELECT TotalTables FROM TableCount) * 30 / 100
-ORDER BY [TableOccurrences] DESC;
+    ca.[ColumnName],
+    ca.[TableOccurrences],
+    tc.TotalTables,
+    CAST(100.0 * ca.[TableOccurrences] / NULLIF(tc.TotalTables, 0) AS DECIMAL(5,1)) AS [PercentOfTables],
+    ca.[DistinctDataTypes],
+    ca.[DistinctNullability],
+    ca.[DataTypeList],
+    CASE
+        WHEN ca.[ColumnName] IN (N'Name', N'Status', N'Type', N'Code', N'Description', N'Email',
+                                 N'IsActive', N'Title', N'Comment', N'Notes', N'Value', N'Amount',
+                                 N'Quantity', N'Date', N'StartDate', N'EndDate')
+            THEN N'GENERIC — likely different meanings per table; do NOT blanket-apply'
+        WHEN ca.[DistinctDataTypes] > 1
+            THEN N'INCONSISTENT data types — investigate per occurrence before applying'
+        WHEN ca.[DistinctNullability] > 1
+            THEN N'INCONSISTENT nullability — investigate before applying'
+        ELSE N'CANDIDATE — proceed to § 2.0.2 multi-signal validation'
+    END AS [ConventionSafety]
+FROM   ColAgg ca
+CROSS JOIN TableCount tc
+WHERE  ca.[TableOccurrences] >= 5                  -- absolute minimum: 5 tables
+   AND ca.[TableOccurrences] >= CEILING(tc.TotalTables * 0.30)  -- AND ≥30% of tables (CEILING avoids small-DB truncation)
+ORDER BY ca.[TableOccurrences] DESC;
 ```
+
+**Threshold rationale (and limits):**
+- **Absolute minimum: 5 tables** prevents false positives in small databases (e.g. a 3-table DB where a single repeat would be 33%)
+- **AND ≥30% of tables** filters out one-off coincidences in large databases
+- **`CEILING(... * 0.30)`** prevents integer-arithmetic truncation (in SQL Server `TotalTables * 30 / 100` gives 0 for 3 tables, 2 for 9 tables i.e. 22%)
+- **Both thresholds must be met** — neither alone is sufficient
+
+For very large databases (1000+ tables), the 30% threshold can be too high. The agent should ask the user to lower it (e.g. 10%) if obvious conventions are being missed.
 
 **Sample values for a candidate convention column (run per candidate):**
 
 ```sql
--- Use top 5 distinct values from the most-populated occurrence to confirm semantics.
--- Replace [ConventionColumn] with the column name surfaced above.
+-- Run this in a loop across SEVERAL tables that contain the candidate column, not just one.
+-- This is part of the § 2.0.2 multi-signal validation.
+-- Replace {Table} with each table that contains the candidate.
 SELECT TOP 5
     [ConventionColumn], COUNT(*) AS [Occurrences]
-FROM   [Schema].[Table]
+FROM   [Schema].[{Table}]
 GROUP BY [ConventionColumn]
 ORDER BY COUNT(*) DESC;
 ```
 
-#### 2.0.2 The Convention vs. Surprise Test
+#### 2.0.2 Multi-signal validation (before any blanket)
+
+A name-frequency candidate becomes a confirmed convention only when **all four signals agree** across the matched tables:
+
+1. **Data type consistent** — the column has the same data type (or compatible types like `DATETIME` / `DATETIME2`) in every occurrence
+2. **Nullability consistent** — same `is_nullable` in every occurrence (or the variance has a known reason like "older tables predate the not-null constraint")
+3. **Value profile compatible** — sample top 5 distinct values from at least 3 different tables (not just the most-populated one); the distributions should look semantically similar (e.g. always low-cardinality short codes, always recent timestamps, always 0/1 flags)
+4. **Schema/role consistent** — the tables containing the column belong to a coherent group (all transactional, all reference, all in same schema) — not "appears in `dbo.Customer` AND in `audit.ChangeLog` where it might mean something different"
+
+If any signal disagrees, do **not** apply a blanket. Either:
+- Split the candidate into two separate conventions (e.g. `Status (transactional tables)` vs `Status (reference tables)`)
+- Skip the convention and document those columns per-table
+
+**Always-exclude list** — these column names are forbidden from convention blankets, even if all four signals agree, because cross-domain false positives are too costly:
+- `Name`, `Status`, `Type`, `Code`, `Description`, `Title`, `Comment`, `Notes`, `Value`, `Amount`, `Quantity`, `Date`, `StartDate`, `EndDate`, `IsActive`, `Email`
+
+For these, the user must individually confirm each occurrence or accept a per-table description draft.
+
+#### 2.0.3 The Convention vs. Surprise Test
 
 For each object (table, view, SP, column, relationship), apply this test before generating a description:
 
@@ -273,7 +378,7 @@ Decision matrix:
 
 **Target outcome:** every table, view, SP, measure, and non-trivial relationship has a description. Columns are documented only when the test says "no" — typically 10–30% of columns in a well-named schema.
 
-#### 2.0.3 Common conventions to detect and confirm
+#### 2.0.4 Common conventions to detect and confirm
 
 | Convention | Typical names | Typical blanket description (subject to user confirmation) |
 |---|---|---|
@@ -301,7 +406,7 @@ After convention confirmation, apply the agreed description to every matching co
 | `*_Staging`, `Stg*`, `tmp*` | Staging | "Staging table — transient. Loaded by [SP from object dependencies]." |
 | `*Reference`, `*Lookup`, `*Code` | Reference/lookup | "Reference list of [entity]." |
 
-### 2.2 Column name patterns (only when not skipped by § 2.0.2)
+### 2.2 Column name patterns (only when not skipped by § 2.0.3)
 
 Apply these only to columns that **survived** the Convention vs. Surprise Test — i.e. not handled by the convention blanket and not self-evident.
 
@@ -316,7 +421,7 @@ Apply these only to columns that **survived** the Convention vs. Surprise Test �
 | `*Address*`, `*City*`, `*PostalCode*`, `*Phone*`, `*Email*` *(when scale/context is non-obvious)* | PII contact | "Contact information. Classification: Contact Info." |
 | `*SIN*`, `*SocialInsurance*` | Sensitive PII | "**Sensitive.** Classification: SIN / Protected B." |
 | `*Password*`, `*Token*`, `*Secret*` | Credential | "**Sensitive credential.** Classification: Credentials / Protected B." |
-| Sentinel values `-1`, `'1753-01-01'`, `'9999-12-31'` *(only if not covered by § 2.0.3 convention pass)* | DW sentinel | "Sentinel: [unknown / open-ended]." |
+| Sentinel values `-1`, `'1753-01-01'`, `'9999-12-31'` *(only if not covered by § 2.0.4 convention pass)* | DW sentinel | "Sentinel: [unknown / open-ended]." |
 
 > **Conventions already covered**: `Created*` / `Modified*` / audit columns and `RowVersion` are handled by the convention pass (§ 2.0); they are NOT re-documented per table.
 >
@@ -336,7 +441,26 @@ Read the SP body and extract signal from these patterns:
 | Single `SELECT` returning rows | Read / report SP | "Returns [columns]. Used by [report / app — ask user]." |
 | `RAISERROR` / `THROW` with specific codes | Validation | "Validates [condition]; raises error [code]." |
 
-### 2.4 DAX measure expression inference
+### 2.4 Trigger body inference
+
+Triggers are invisible side effects — always document. Read the trigger body and extract:
+
+| Signal | Description contribution |
+|---|---|
+| Parent table + timing + event (from `sys.triggers` + `sys.trigger_events`) | "[AFTER\|INSTEAD OF] [INSERT\|UPDATE\|DELETE] on `[Schema].[ParentTable]`." |
+| Writes to `Audit*` / `History*` / `Archive*` table | "Captures the changed row(s) into `[target table]` for [audit / history]." |
+| Maintains denormalised columns (UPDATE on different table) | "Maintains `[column]` on `[other table]` in sync with [source change]." |
+| `IF UPDATE([col])` guards | "Fires only when `[col]` changes — partial updates to other columns are no-ops." |
+| Calls another SP | "Delegates to `[SP]` for [purpose]." |
+| `THROW` / `RAISERROR` to reject the change | "Validates [condition]; rejects [INSERT\|UPDATE\|DELETE] if [rule]." |
+| References `inserted` / `deleted` set without aggregation | "Row-level processing — performance-sensitive on batch operations." |
+| `WHILE` / cursor in trigger | 🟠 Flag for review — row-by-row trigger is a perf risk; document the reason. |
+| Cross-database or linked-server write | 🔴 Flag prominently — invisible cross-system side effect. |
+| Trigger is disabled (`tr.is_disabled = 1`) | Add to description: "**Currently DISABLED** — verify with team whether intentional." |
+
+Always include the cascading impact in the description: *"Affects: [list of tables this trigger modifies]"* — so a developer changing the parent table can see the downstream consequences.
+
+### 2.5 DAX measure expression inference
 
 For SSAS Tabular measures, parse the expression to derive `Description`:
 
@@ -357,7 +481,7 @@ Valid groupings: [Dim 1], [Dim 2], …
 Notes: [behavior at edges — blanks, ratios, time period assumptions]
 ```
 
-### 2.5 Cross-object signal
+### 2.6 Cross-object signal
 
 When inference is uncertain, expand to neighbouring objects:
 
@@ -365,7 +489,7 @@ When inference is uncertain, expand to neighbouring objects:
 - Column description unclear? → Sample 10 distinct values and present them to the user with the draft.
 - Measure description unclear? → Look at base measures it depends on (parse expression); the leaf measure usually has the meaning.
 
-### 2.6 Relationship documentation
+### 2.7 Relationship documentation
 
 Relationships are often the highest-value documentation for human or AI reasoning — they reveal *how the system works internally* in a way that table descriptions alone cannot. Always generate relationship descriptions for:
 
@@ -377,11 +501,17 @@ Relationships are often the highest-value documentation for human or AI reasonin
 
 #### Where to attach the description
 
-| Object | Mechanism |
-|---|---|
-| SQL Server FK constraint | `sp_addextendedproperty` with `@level0type='SCHEMA', @level1type='TABLE', @level2type='CONSTRAINT'` |
-| SQL Server inferred relationship (no FK) | `MS_Description` on the FK column itself, prefixed with "Inferred FK: ..." |
-| SSAS Tabular relationship | TMDL `description` property on the relationship block |
+| Object | Mechanism | Verified |
+|---|---|---|
+| SQL Server FK constraint (defined) | `sp_addextendedproperty` with `@level0type='SCHEMA', @level1type='TABLE', @level2type='CONSTRAINT', @level2name='[FK_Name]'` | ✅ Standard SQL Server feature |
+| SQL Server inferred relationship (no FK) | New custom extended property `InferredRelationship` on the FK column (do not overload `MS_Description` — that column already needs a business description for its own meaning) | ✅ Custom property names are explicitly supported by `sp_addextendedproperty` |
+| SSAS Tabular relationship | TOM **annotation** named `BusinessDescription` on the `Relationship` object (the `Relationship` class in TOM does **not** expose a `Description` property — verified against Microsoft.AnalysisServices v19.114.0 docs; only `Annotations` and `ExtendedProperties` are available for metadata) | ✅ TE2 supports via C# scripting: `rel.Annotations.SetAnnotation("BusinessDescription", "...")`; serialized to TMDL as `annotation BusinessDescription = '...'` |
+
+> **Why not `MS_Description` on the FK column?** The column already needs (or has) its own `MS_Description` for the column's meaning. Conflating relationship metadata into the same property either overwrites the column meaning or blocks the relationship from being recorded. Use a separate property name.
+
+For inferred relationships, add **both** descriptions:
+- The column's own `MS_Description` (what this column means as data)
+- A new `InferredRelationship` extended property (where the column points and on what basis it was inferred — e.g. "Inferred FK to `Customers.CustomerID`. Basis: column-name match + sample value overlap. Confirmed with data team on YYYY-MM-DD.")
 
 #### What to include in a relationship description
 
@@ -400,6 +530,73 @@ Bad → Good examples:
 |---|---|
 | "FK to Customer" | "Many-to-one to `Sales.Customer`. The Customer is the bill-to party at order time; preserved via SCD2 if the customer record changes." |
 | "Links Order to LineItem" | "One Order has many `Order_Detail` rows (≥ 1). Cascade-delete is NOT configured; deleting an Order leaves orphan detail rows — handle in application." |
+
+### 2.8 CHECK constraint documentation
+
+CHECK constraints encode business rules invisibly. Always document the **business reason** for the constraint (the constraint expression alone tells the *what*, not the *why*).
+
+Attach via:
+```sql
+EXEC sys.sp_addextendedproperty
+    @name = N'MS_Description',
+    @value = N'<business reason for the constraint>',
+    @level0type = N'SCHEMA',   @level0name = N'Sales',
+    @level1type = N'TABLE',    @level1name = N'Order',
+    @level2type = N'CONSTRAINT', @level2name = N'CK_Order_PositiveAmount';
+```
+
+Audit query for missing CHECK constraint descriptions:
+
+```sql
+SELECT
+    s.[name] + '.' + parent_o.[name] + '.' + cc.[name]  AS [QualifiedConstraint],
+    cc.[definition]                                     AS [ConstraintExpression]
+FROM   sys.check_constraints cc
+JOIN   sys.objects parent_o ON cc.parent_object_id = parent_o.object_id
+JOIN   sys.schemas s        ON parent_o.schema_id = s.schema_id
+LEFT JOIN sys.extended_properties ep
+    ON ep.major_id = cc.object_id
+   AND ep.minor_id = 0
+   AND ep.class    = 1
+   AND ep.[name]   = N'MS_Description'
+WHERE  cc.is_ms_shipped = 0
+   AND ep.major_id IS NULL
+ORDER BY s.[name], parent_o.[name], cc.[name];
+```
+
+### 2.9 Database-level and schema-level documentation
+
+Extended properties can describe the database itself (`class = 0`) and each schema (`class = 3`). These are often the most useful documentation for someone new to the system, but commonly missed.
+
+Always document at sign-off:
+
+- **Database** — what is this database for? Production OLTP? Reporting DW? Snapshot for analytics? Sandbox?
+- **Each non-system schema** — why does this schema exist as a separation? (`Reporting` separate from `dbo` likely indicates a partitioning of concerns; document it.)
+
+Templates:
+
+```sql
+-- Database-level
+EXEC sys.sp_addextendedproperty
+    @name  = N'MS_Description',
+    @value = N'Operational order-management system for North American B2B. System of record for orders, fulfillments, returns. Replicated to [ReportingDB] every 15 minutes via transactional replication.';
+
+-- Schema-level
+EXEC sys.sp_addextendedproperty
+    @name  = N'MS_Description',
+    @value = N'Reporting projections — denormalised views and pre-aggregated tables consumed by the BI layer. Read-only from application; refreshed by SQL Agent job [Job_Refresh_Reporting].',
+    @level0type = N'SCHEMA', @level0name = N'Reporting';
+```
+
+### 2.10 Read-only access fallback
+
+If the agent has only read access to the database (cannot execute `sp_addextendedproperty`), it must still complete the discovery + drafting + interview workflow and produce the T-SQL script. Output behaviour:
+
+- All drafts and audit results are presented to the user normally
+- The final output is a complete idempotent script saved to the workspace (default: `design/documentation-{TargetName}-{YYYYMMDD}.sql`) for the user to apply via their own change-management process
+- Coverage report is written normally; the "Documented after" column shows "pending — script generated, not yet applied"
+
+Do NOT attempt to use `EXECUTE AS` / impersonation to bypass permissions.
 
 ---
 
@@ -473,8 +670,8 @@ The `db-documenter` agent processes undocumented objects in this order — conve
 2. For each candidate, sample top 5 values from the most-populated occurrence (§ 2.0.1)
 3. Present each detected convention to the user in **one message**:
    > *"I found these recurring patterns. For each, confirm the draft description, revise, or skip:*
-   > *• `ModifiedDate` — appears in 47 of 52 tables. Sample values look like recent timestamps. Draft: '[from § 2.0.3]'. Confirm?*
-   > *• `IsDeleted` — appears in 38 of 52 tables. Values: 0 (most rows), 1 (few rows). Draft: '[from § 2.0.3]'. Confirm?*
+   > *• `ModifiedDate` — appears in 47 of 52 tables. Sample values look like recent timestamps. Draft: '[from § 2.0.4]'. Confirm?*
+   > *• `IsDeleted` — appears in 38 of 52 tables. Values: 0 (most rows), 1 (few rows). Draft: '[from § 2.0.4]'. Confirm?*
    > *• `Entry_User_ID` — appears in 41 of 52 tables. Sample values are short codes like 'JDOE'. Draft: 'Audit: user identifier of the person who created the row. Format: AD username, all caps.'. Confirm?"*
 4. Apply confirmed conventions as a blanket — write descriptions to every occurrence
 5. Record confirmed conventions to `design/decisions.md` under `## Documentation Conventions` so future passes skip detection
@@ -483,10 +680,10 @@ The `db-documenter` agent processes undocumented objects in this order — conve
 
 1. Run coverage audit (Q-SRC-1, Q-DW-1, or Q-SSAS-1 depending on target)
 2. Prioritise: high-row-count tables first; tables with downstream dependencies next; archive/log tables last (often acceptable to leave undocumented)
-3. **Filter undocumented columns through the Convention vs. Surprise Test (§ 2.0.2)** — discard any whose meaning is self-evident from name + data type + relationships. Typically 70–90% of columns are skipped at this stage.
+3. **Filter undocumented columns through the Convention vs. Surprise Test (§ 2.0.3)** — discard any whose meaning is self-evident from name + data type + relationships. Typically 70–90% of columns are skipped at this stage.
 4. For each table in the worklist:
    - Run the appropriate column audit (Q-SRC-2 / Q-DW-2 / Q-SSAS-2) restricted to that table
-   - Generate drafts for: table description (always) + relationship descriptions (§ 2.6, for non-trivial FKs) + the column drafts that survived the test
+   - Generate drafts for: table description (always) + relationship descriptions (§ 2.7, for non-trivial FKs) + the column drafts that survived the test
    - Present the batch to the user in one message — table description first, then relationships, then columns in a markdown table
    - User reviews, confirms, or revises in one round
    - Write back per the target's write mechanism (§ Authority & Scope)
@@ -576,3 +773,61 @@ A high skip count is healthy — it indicates good naming hygiene. List individu
 ```
 
 This file is the audit trail. It does not replace the actual extended properties / TMDL descriptions — those are written inline at the source.
+
+---
+
+## 8. Documentation Conventions — `design/decisions.md` Schema
+
+When confirmed conventions are persisted to `design/decisions.md` (per Pass 0), use the following table format under a `## Documentation Conventions` section so future agent sessions can reliably parse and reapply them.
+
+```markdown
+## Documentation Conventions
+
+> Org-wide and project-specific documentation conventions confirmed by the user during a `db-documenter` pass.
+> Future passes load this table on session start, validate the convention still applies (re-run multi-signal validation if the schema has changed materially), and skip re-asking.
+
+| ConventionId | Scope | MatchPattern | DataType | Nullability | AppliesToSchemas | Exclusions | Description | Confidence | ConfirmedBy | ConfirmedDate | LastValidated |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| DC-001 | column-name-exact | `ModifiedDate` | DATETIME2 | NOT NULL | (all user schemas) | (none) | Audit: when the row was last modified in the source system. Used as the incremental watermark by ELT. | confirmed | jdoe | 2026-06-05 | 2026-06-05 |
+| DC-002 | column-name-exact | `IsDeleted` | BIT | NOT NULL | (all user schemas) | `Audit.*` | Soft-delete flag: 1 = logically deleted (excluded from default views); 0 = active. Rows are never physically removed. | confirmed | jdoe | 2026-06-05 | 2026-06-05 |
+| DC-003 | column-name-suffix | `*_User_ID` | NVARCHAR(50) | NULL | `Sales`, `Inventory` | `Audit.*` | Audit: AD username (all caps) of the person who created or last modified the row. NULL for rows created by automated processes. | confirmed | jdoe | 2026-06-05 | 2026-06-05 |
+```
+
+**Field definitions:**
+
+| Field | Required | Meaning |
+|---|---|---|
+| ConventionId | yes | Stable identifier `DC-NNN`. Never reused even if a convention is deprecated. |
+| Scope | yes | `column-name-exact`, `column-name-prefix`, `column-name-suffix`, `column-name-regex`, `sentinel-value`, `pk-shape` |
+| MatchPattern | yes | The literal name or pattern matched by the Scope |
+| DataType | yes | Required data type for the match to apply (or comma-separated list of compatible types) |
+| Nullability | yes | `NOT NULL`, `NULL`, or `EITHER` if both occur |
+| AppliesToSchemas | yes | Comma-separated schema list, or `(all user schemas)` |
+| Exclusions | yes | Tables or schemas where this convention does NOT apply (e.g. an audit table that uses the same column name for a different purpose) |
+| Description | yes | The exact text that will be written as `MS_Description` for every matching column |
+| Confidence | yes | `confirmed` / `assumed` / `uncertain` |
+| ConfirmedBy | yes | User identifier (initials or username) who confirmed the convention |
+| ConfirmedDate | yes | YYYY-MM-DD when first confirmed |
+| LastValidated | yes | YYYY-MM-DD when the convention was last re-checked against the live schema (multi-signal validation) |
+
+If a column matches a convention but is in the `Exclusions` list, the agent falls back to per-table inference for that column.
+
+---
+
+## 9. Glossary and Decisions Conflict Handling
+
+If `design/glossary.md` defines a term that **contradicts** how a database column is used in practice (e.g. glossary says "Customer = the company that places orders" but `dbo.Customer.CustomerID` actually identifies individual contact people), the agent must NOT silently apply the glossary term. The resulting documentation would be wrong and would mislead every future reader.
+
+**Required behaviour:**
+
+1. **Stop drafting** for the conflicting object
+2. **Present the conflict to the user** explicitly:
+   > *"Conflict detected. `design/glossary.md` defines 'Customer' as 'the company that places orders'. But `dbo.Customer` in this source database has individual contact attributes (`FirstName`, `LastName`, `DateOfBirth`) — it appears to represent individual people, not companies. How should I resolve this?*
+   > *(a) The glossary is correct — this source table is mis-named; document it under its true meaning ('individual contact people') and flag the naming inconsistency*
+   > *(b) The source is correct for this project — add a new glossary entry 'Customer (legacy source)' with the contact-person meaning*
+   > *(c) The glossary needs updating — revise the canonical definition*
+   > *(d) Defer this object — document later after the team resolves the terminology"*
+3. **Record the conflict** in `design/documentation-coverage.md` under a `## Terminology Conflicts` section so it doesn't get lost
+4. **Continue with other objects** that don't have conflicts — do not block the whole pass on a single conflict
+
+The same rule applies to conflicts with `design/decisions.md` — never silently apply a decision when the code shows a different reality. Surface the conflict and let the user decide.

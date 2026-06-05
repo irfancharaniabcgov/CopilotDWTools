@@ -132,9 +132,11 @@ Never generate descriptions for: system tables (`sys.*`, `INFORMATION_SCHEMA.*`)
 
 If an object already has a description, do not replace it unless the user explicitly asks. The agent's job is to fill gaps, not rewrite existing prose. Use the upsert pattern from `extended-properties-templates.md` (`IF EXISTS sp_updateextendedproperty ELSE sp_addextendedproperty`) only for *missing* properties — not to overwrite present ones.
 
-### 11 — Honour project conventions
+### 11 — Honour project conventions; surface conflicts, never silently override
 
-If `design/glossary.md` exists in the workspace, use its canonical terms verbatim in descriptions. If `design/decisions.md` exists, do not generate a description that contradicts the register (e.g. if BD-01 says "NULL measures display as BLANK()", do not write "NULL measures default to zero" in a measure description). If the new `## Documentation Conventions` section exists in `design/decisions.md` (written by Principle 5), apply its conventions automatically — do not re-detect or re-ask.
+If `design/glossary.md` exists in the workspace, use its canonical terms verbatim in descriptions. If `design/decisions.md` exists, do not generate a description that contradicts the register (e.g. if BD-01 says "NULL measures display as BLANK()", do not write "NULL measures default to zero" in a measure description). If the `## Documentation Conventions` section exists in `design/decisions.md` (written by Principle 5), apply its conventions automatically — do not re-detect or re-ask.
+
+**Conflict rule**: when the codebase **contradicts** the glossary or decisions register (e.g. a column named `Customer` in the source actually represents an individual contact, but the glossary defines Customer as a company), STOP. Do not silently apply the glossary term to mis-documented data. Follow the conflict-handling procedure in `references/documentation-authoring.md` § 9: present the conflict to the user with resolution options, record the conflict in the coverage report, defer that object, continue with non-conflicting objects.
 
 ---
 
@@ -174,8 +176,16 @@ If `design/glossary.md` exists in the workspace, use its canonical terms verbati
   - Fact tables: also `Grain`
   - Dimension tables: also `SCDType`, `ConformedDimension`
   - Columns: `MS_Description`, `KeyColumn` (SurrogateKey / NaturalKey / ForeignKey / Measure / Attribute / Flag), `InformationType`, `SensitivityLabel`, `SourceColumn` (where applicable)
+- **Pre-defined conventions** (skip Pass 0 detection — DW conventions are known and stable): apply these blanket descriptions directly without running the convention-detection query, because the DW build pattern guarantees they appear consistently. Record them to `design/decisions.md § Documentation Conventions` as `DC-DW-NNN` entries with `Confidence = assumed`:
+  - `{Entity} Key` (BIGINT IDENTITY in `Dimension.*`) → "Surrogate key. System-generated; not exposed to end users."
+  - `_Source{NaturalKey}` → "Natural key from source system. Used by ELT to MERGE; not for reporting."
+  - `[Date Key]` (DATE in fact tables, role-played as `Order Date Key`, `Ship Date Key`, etc.) → "FK to `Dimension.Calendar`. See role description for which business date this represents."
+  - `[Lineage Key]` → "ELT lineage key. Links the row back to the batch that loaded it via `Internal.Lineage`."
+  - `[Is Current Row]` (SCD Type 2 dimensions) → "1 = current version of this entity; 0 = historical version. Default filter for live reporting."
+  - `[Effective Date]` / `[Expiration Date]` (SCD Type 2) → "Valid time range for this version of the row. `9999-12-31` = open-ended (current)."
 - **Apply mechanism default**: post-deploy script in the SSDT project at `DW/Scripts/Post-Deployment/Documentation-{YYYYMMDD}.sql`. The script is committed alongside the schema — deployment applies extended properties automatically.
 - **When called from Mode N**: inline by default (Principle 4) — write directly into `DW/Scripts/Post-Deployment/`. No re-confirmation.
+- **Double-documentation avoidance**: if Mode N already ran Mode C (extended properties scripting) during the H/J/I steps, those descriptions are already in place. D2 must run the coverage audit FIRST and only fill genuine gaps. Use the upsert pattern (`IF EXISTS sp_updateextendedproperty ELSE sp_addextendedproperty`) only on **missing** properties — never overwrite a present description without explicit user request (Principle 10).
 
 Run the DW completeness query in `references/documentation-authoring.md` § 1 (the `RequiredProps` CTE) to surface tables missing required properties beyond `MS_Description`.
 
@@ -186,17 +196,41 @@ Run the DW completeness query in `references/documentation-authoring.md` § 1 (t
 **Process**:
 
 1. **Read the model**: prefer DMV (Q-SSAS-1/2/3) if a live AS endpoint is available; otherwise parse TMDL files from `SSAS/{ModelName}/tables/*.tmdl`.
-2. **Coverage audit**: list visible tables, columns, and measures with no `description`. Skip `IsPrivate = TRUE`, `IsHidden = TRUE` (unless user requests), and underscore-prefixed columns like `_RowNumber`.
+2. **Coverage audit**: list visible tables, columns, measures, and relationships with no documentation. Skip `IsPrivate = TRUE`, `IsHidden = TRUE` (unless user requests), and underscore-prefixed columns like `_RowNumber`.
 3. **Inference**:
    - **Tables**: derive from SSAS schema view definition (`SSAS.[ViewName]` in the DW) + the underlying DW table description if one exists. Default format: `Group by: [Dim 1], [Dim 2], ...` per `pbix-report-standards.md`.
    - **Columns**: derive from the DW source column's `MS_Description` if present, otherwise from heuristics § 2.2.
-   - **Measures**: parse the DAX expression using heuristics § 2.4. Always emit the org-standard `Valid groupings: ...\nNotes: ...` format.
+   - **Measures**: parse the DAX expression using heuristics § 2.5. Always emit the org-standard `Valid groupings: ...\nNotes: ...` format.
+   - **Relationships**: derive from the underlying DW FK constraint description if present; otherwise generate from cardinality + table semantics (heuristics § 2.7).
 4. **Cross-reference**: if a DW column has a description that contradicts the SSAS draft, flag the inconsistency to the user before writing.
 5. **Apply mechanism**:
-   - **TMDL files in source control** (default for SSDT/Tabular Editor 2 projects): edit `SSAS/{ModelName}/tables/[Table].tmdl` files directly. Add `description: "..."` lines under the appropriate `table` / `column` / `measure` blocks.
-   - **Live model** (if user prefers and authorises): generate a Tabular Editor 2 C# script and apply via `TabularEditor.exe -S "script.cs" "Provider=...;Data Source=server;Initial Catalog=ModelName"`.
+   - **TMDL files in source control** (default for SSDT/Tabular Editor 2 projects):
+     - **Tables, columns, measures**: edit `SSAS/{ModelName}/tables/[Table].tmdl` files directly. Add `description: "..."` lines under the appropriate `table` / `column` / `measure` blocks (these are supported by TOM and serialized natively by TMDL).
+     - **Relationships**: TOM `Relationship` class does **not** expose a `Description` property (verified against Microsoft.AnalysisServices v19.114.0). Use a TOM `annotation` named `BusinessDescription` instead. TMDL serialises annotations as `annotation BusinessDescription = '...'` under the `relationship` block.
+   - **Live model** (if user prefers and authorises): generate a Tabular Editor 2 C# script and apply via `TabularEditor.exe -S "script.cs" "Provider=...;Data Source=server;Initial Catalog=ModelName"`. Use the annotation API for relationships:
+     ```csharp
+     foreach (var rel in Model.Relationships) {
+         if (!rel.Annotations.ContainsKey("BusinessDescription")) {
+             rel.SetAnnotation("BusinessDescription", "<description>");
+         }
+     }
+     ```
    - Ask via Principle 3 prompt unless invoked from Mode N (then inline TMDL is the default per Principle 4).
 6. **Output**: edited TMDL files (committed alongside schema) OR a TE2 script. Either way, also write the coverage report.
+
+---
+
+## Mode D0 — Database & Schema Documentation (always run first)
+
+Before D1, D2, or D3, run a brief Database + Schema documentation pass. These two levels are commonly missed but provide the highest-leverage context for anyone (human or AI) approaching the database for the first time.
+
+1. Query `sys.extended_properties` at `class = 0` (database) and `class = 3` (schemas) to find what's already documented (Q-SRC-5 in the reference).
+2. For each undocumented database or schema, generate a draft using heuristics § 2.9 of the reference, then ask the user 1–2 targeted questions:
+   - DB: "What's the primary purpose of this database? Production OLTP, reporting DW, snapshot for analytics, sandbox?"
+   - Schema: "Why does this schema exist as a separation from `dbo` / other schemas? What's its role?"
+3. Write the descriptions via `sp_addextendedproperty` at the appropriate level.
+
+D0 is **always** run before per-object modes — even if the user only asked to document specific tables. The database and schema context informs every per-object description.
 
 ---
 
@@ -210,9 +244,15 @@ When invoked standalone (not from another agent), ask:
 > *(c) An SSAS Tabular model — provide server + model name, or path to TMDL folder*
 > *(d) All three (typically after a build) — confirm each target one at a time"*
 
-When invoked from `dw-report-designer` Mode N: target is whatever was just built. Run D2 (DW) and D3 (SSAS) in sequence; D1 only if Mode P also discovered an undocumented source DB.
+When invoked from `dw-report-designer` Mode N: target is whatever was just built. Run D0 → D2 (DW) → D3 (SSAS) in sequence; D1 only if Mode P also discovered an undocumented source DB.
 
 When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run.
+
+### Coverage threshold rationale
+
+The 80% threshold in `ssas-tabular-dw-architect` Mode A applies to the **post-Pass-0 coverage** (after convention blanket). A blanket pass alone can jump coverage from 5% to 90% without genuine human review of the surprising columns. The threshold is therefore informational, not gating — Mode A should always offer the user a documentation handoff regardless of % coverage if Pass 1 (per-table) hasn't been run.
+
+To distinguish "documented by convention blanket only" from "documented after human review of each unusual object," the coverage report (§ 7 of the reference) breaks down columns by category. Healthy state: 100% on tables/views/SPs/triggers/relationships/measures, plus all unusual columns reviewed; convention blanket count is reported separately and not counted toward the "unusual" goal.
 
 ---
 
