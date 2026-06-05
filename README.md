@@ -27,6 +27,52 @@ copilot plugin uninstall sql-dw-ssas-toolkit
 
 ---
 
+## Using the Agents
+
+These agents work in both **Copilot CLI** and **VS Code Copilot Chat**. The usage pattern differs slightly between the two.
+
+### Copilot CLI (recommended)
+
+**Just describe what you want.** The default Copilot agent has access to all tools and will load the agent context automatically. You do not need to pre-select an agent.
+
+```
+I want to document my source database tables and columns inline
+Review my DW schema for Kimball compliance
+I need to design a new sales report and build the DW subject area
+```
+
+**Using `/agent` to start a focused session** — you can also select an agent directly for a dedicated session:
+
+```
+/agent
+# select: DB Documenter / DW Report Designer / DW & SSAS Tabular Architect
+```
+
+> If you see fewer tools than expected after selecting an agent via `/agent`, run with `--allow-all-tools`:
+> ```bash
+> copilot --agent sql-dw-ssas-toolkit:db-documenter --allow-all-tools
+> ```
+
+### VS Code Copilot Chat
+
+Use `@` to address the agent directly:
+
+```
+@DB Documenter  document my source database
+@DW & SSAS Tabular Architect  review my DW schema
+@DW Report Designer  I need a new sales report
+```
+
+### Skills (slash commands)
+
+Skills can be invoked from any agent or from the default agent:
+
+```
+/sql-dw-ssas-toolkit:sql-dw-dimensional-review
+```
+
+---
+
 **Authority hierarchy:**
 - **SQLBI (Marco Russo & Alberto Ferrari / daxpatterns.com)** — primary authority for SSAS Tabular model design and DAX. When SQLBI guidance conflicts with Kimball, SQLBI wins for the semantic layer.
 - **Kimball Dimensional Modeling** — foundational authority for physical DW design (fact/dimension schema, SCD types, bus matrix, grain declaration).

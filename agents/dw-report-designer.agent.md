@@ -2,7 +2,7 @@
 description: "Conversational requirements analyst for SQL Server DW report development. Interviews users about business requirements, coordinates with the DW & SSAS Tabular Architect to validate source data and grain, produces a signed-off design specification, then hands off to the sql-dw-dimensional-review skill build modes (H–N) to generate all required artifacts. Always gates progress on user confirmation before moving to the next phase."
 name: "DW Report Designer"
 model: "gpt-5.5"
-tools: ["changes", "search/codebase", "editFiles", "fetch", "new", "runCommands", "search", "mssql_connect", "mssql_query", "mssql_listServers", "mssql_listDatabases", "mssql_disconnect", "mssql_visualizeSchema"]
+tools: ["changes", "search/codebase", "editFiles", "fetch", "new", "runCommands", "extensions", "mssql_connect", "mssql_query", "mssql_listServers", "mssql_listDatabases", "mssql_disconnect", "mssql_visualizeSchema", "bash", "edit", "view", "grep", "glob"]
 ---
 
 # DW Report Designer

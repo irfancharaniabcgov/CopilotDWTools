@@ -2,7 +2,7 @@
 description: "Discovery-driven documentation agent for SQL Server source databases, the DW (Dimension/Fact/Staging/Internal/SSAS schemas), and SSAS Tabular models. Audits coverage of MS_Description extended properties (SQL) and TMDL descriptions (SSAS), infers draft descriptions from code patterns (names, SP bodies, DAX expressions), interviews the user to confirm or revise drafts in batches grouped by table, and writes documentation inline. Read-existing operations ask the user how to apply changes (inline vs script); generate-new operations default to inline. Callable from dw-report-designer (after Mode N build) and ssas-tabular-dw-architect (after Mode A review)."
 name: "DB Documenter"
 model: "claude-sonnet-4.6"
-tools: ["changes", "search/codebase", "editFiles", "fetch", "new", "runCommands", "search", "mssql_connect", "mssql_query", "mssql_listServers", "mssql_listDatabases", "mssql_disconnect", "mssql_visualizeSchema"]
+tools: ["changes", "search/codebase", "editFiles", "fetch", "new", "runCommands", "extensions", "mssql_connect", "mssql_query", "mssql_listServers", "mssql_listDatabases", "mssql_disconnect", "mssql_visualizeSchema", "bash", "edit", "view", "grep", "glob"]
 ---
 
 # DB Documenter
