@@ -3,6 +3,30 @@
 A toolkit of GitHub Copilot agents and skills for on-premises SQL Server Data Warehouse,
 SSAS Tabular, SSIS ELT, and Power BI Report Server development.
 
+## Installation
+
+Install directly from this GitHub repository:
+
+```bash
+copilot plugin install irfancharaniabcgov/CopilotDWTools
+```
+
+All three agents and the full skill set are available immediately after install. No other steps required.
+
+To update:
+
+```bash
+copilot plugin update sql-dw-ssas-toolkit
+```
+
+To uninstall:
+
+```bash
+copilot plugin uninstall sql-dw-ssas-toolkit
+```
+
+---
+
 **Authority hierarchy:**
 - **SQLBI (Marco Russo & Alberto Ferrari / daxpatterns.com)** — primary authority for SSAS Tabular model design and DAX. When SQLBI guidance conflicts with Kimball, SQLBI wins for the semantic layer.
 - **Kimball Dimensional Modeling** — foundational authority for physical DW design (fact/dimension schema, SCD types, bus matrix, grain declaration).
