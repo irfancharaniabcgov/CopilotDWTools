@@ -325,6 +325,8 @@ If the user has brought answers, resolve them and update the spec/decisions regi
 
 #### Multi-role awareness
 
+**Always ask the question regardless of who is present.** Roles are for organising deferred items, not for gatekeeping questions. A Technical Architect may answer DBA questions; a Business Analyst may know the client's requirements. Only defer when the user explicitly says they cannot answer.
+
 If the user mentions different people/roles are needed for different answers (e.g., "the architect would know that" or "I'd need to ask the business"), track `Who can answer` in each deferral using the standard role taxonomy:
 
 **Primary roles** (most common):
@@ -334,7 +336,7 @@ If the user mentions different people/roles are needed for different answers (e.
 
 **Secondary roles** (infrastructure/data):
 - **Data Architect** — model design, data lineage, governance
-- **DBA** — server configuration, security, performance tuning, MAXDOP, Resource Governor
+- **DBA** — server configuration, security, performance tuning, Resource Governor
 - **Operations Analyst (Infrastructure)** — networking, server access, scheduling, AD/Entra
 
 On resume, group deferred items by role:

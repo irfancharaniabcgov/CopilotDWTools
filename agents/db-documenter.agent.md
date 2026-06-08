@@ -446,6 +446,8 @@ At the end of each batch presentation, if deferred items have accumulated:
 
 #### Resume prompt
 
+**Always ask the question regardless of who is present.** Roles are for organising deferred items, not for gatekeeping. A person in one role may answer questions typically assigned to another — only defer when the user explicitly says they cannot answer.
+
 On session resume (after freshness check, step 4), present deferred items grouped by who can answer using the standard role taxonomy:
 
 **Standard roles**: Client, Business Analyst, Technical/Solutions Architect, Data Architect, DBA, Operations Analyst (Infrastructure), Vendor (external)
