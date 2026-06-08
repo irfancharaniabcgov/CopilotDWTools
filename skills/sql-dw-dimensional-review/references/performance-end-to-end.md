@@ -30,7 +30,8 @@ DW Load (ELT)          →  SSAS Model Shape       →  DAX Measures        → 
 | Fact table < 5M rows total | Full truncate/reload — simplest, fast enough |
 | Fact table 5M–50M rows | Incremental load (watermark-based `@StartDate`/`@EndDate`) |
 | Fact table > 50M rows | Incremental + partition switching on current period |
-| Dimension < 500K rows | Full reload (SCD Type 1) or MERGE (SCD Type 2) |
+| Dimension (SCD Type 1) < 500K rows | Full reload — safe for Type 1 (no history to preserve) |
+| Dimension (SCD Type 2) any size | Incremental with change detection — full reload destroys history |
 | Dimension > 500K rows | Incremental by change date; consider hash-based change detection |
 
 ### Incremental Load Performance Rules
@@ -73,7 +74,7 @@ ALTER TABLE Staging.SalesPartition
 
 | Model Metric | Target | Warning | Action |
 |---|---|---|---|
-| Total model RAM | < 4 GB | > 8 GB | Aggregate tables, reduce cardinality |
+| Total model RAM | < 50% of server RAM | > 70% of server RAM | Aggregate tables, reduce cardinality, column pruning |
 | Single table rows | < 50M | > 100M | Partition + aggregation tables |
 | Column cardinality | < 1M distinct | > 5M distinct | Hide/remove, use as drill-through only |
 | Relationship cardinality | 1:many preferred | Many:many | Bridge table + TREATAS |
@@ -85,7 +86,7 @@ ALTER TABLE Staging.SalesPartition
 2. **Reduce string precision** — truncate long descriptions (> 100 chars) unless needed for drill-through.
 3. **Split high-cardinality columns** — transaction IDs, free-text notes → separate drill-through table with inactive relationship.
 4. **Use integer keys** — surrogate keys (INT) compress better than composite natural keys (NVARCHAR).
-5. **Aggregate tables** — for > 50M row facts: create a pre-aggregated table at month/category grain for summary visuals.
+5. **Aggregate tables** — for > 50M row facts: create a pre-aggregated table at month/category grain for summary visuals. Note: SSAS Tabular on-prem has no automatic aggregation awareness — consumers must route to summary tables explicitly via measure logic (`IF`/`SWITCH` on grain detection) or by exposing separate measures for summary vs detail.
 
 ### Partition Strategy for Processing Performance
 
@@ -104,16 +105,16 @@ ALTER TABLE Staging.SalesPartition
 ### Encoding Hints
 
 ```tmdl
--- Force value encoding on frequently aggregated numeric columns
+-- Force value encoding on frequently aggregated numeric columns (after benchmarking)
 column SalesAmount
-    encodingHint: value
+    encodingHint: Value
 
 -- Leave hash encoding for string/FK columns (default)
 column CustomerName
-    encodingHint: hash
+    encodingHint: Hash
 ```
 
-**Rule**: If a column is the target of `SUM`, `AVERAGE`, `MIN`, or `MAX` in > 3 measures, force value encoding.
+**Guidance**: Use VertiPaq Analyzer to identify large/high-cardinality columns. Prefer data type and cardinality reduction first. Only set `encodingHint` after benchmarking with DAX Studio Server Timings — encoding overrides can harm performance if applied blindly.
 
 ---
 
@@ -126,8 +127,8 @@ column CustomerName
 | 1 | **Avoid iterators on large tables** | 🔴 High | `SUMX(Sales, ...)` on 50M rows → use pre-computed column |
 | 2 | **Minimise context transitions** | 🔴 High | Nested `CALCULATE` inside `SUMX` → extract to VAR |
 | 3 | **Use VAR to cache intermediate results** | 🟠 Medium | Same sub-expression evaluated twice → assign to VAR |
-| 4 | **Prefer CALCULATE over FILTER(ALL())** | 🟠 Medium | `FILTER(ALL(Table))` scans entire table → use `KEEPFILTERS` |
-| 5 | **Avoid DISTINCTCOUNT on high-cardinality** | 🟡 Low–Med | > 1M distinct values → pre-aggregate or approximate |
+| 4 | **Filter dimension columns, not fact tables** | 🟠 Medium | `FILTER(ALL(FactTable), ...)` scans entire fact → pass Boolean predicate on dimension column directly in CALCULATE |
+| 5 | **Avoid DISTINCTCOUNT on high-cardinality** | 🟡 Low–Med | > 1M distinct values → pre-aggregate at load time (APPROXIMATEDISTINCTCOUNT is not available for SSAS Tabular Import / live-connect) |
 | 6 | **Use DIVIDE() not `/`** | 🟡 Low | Avoids error handling overhead |
 | 7 | **Limit IF/SWITCH branches** | 🟡 Low | > 5 branches → consider upstream classification column |
 
@@ -144,14 +145,14 @@ VAR _TaxRate = MAX( TaxRate[Rate] )
 RETURN SUMX( Sales, [Unit Price] * [Quantity] * (1 + _TaxRate) )
 ```
 
-### Calculation Group Performance
+### Calculation Group Benefits
 
-Calculation groups are more performant than duplicated time-intelligence measures because:
-- Single SELECTEDMEASURE() evaluation per calc item vs. N separate measures
-- Engine can batch-optimise the evaluation plan
-- Fewer Storage Engine queries when users switch time periods
+Calculation groups reduce measure proliferation and improve maintainability and consistency. Performance is comparable to hand-written equivalents (not inherently faster — `SELECTEDMEASURE()` still evaluates the full measure). Use them when governance matters:
+- > 5 base measures × > 3 time-intelligence variants to manage
+- Consistency guarantee: all measures get the same time-intelligence logic
+- Reduced maintenance: one fix applies to all measures
 
-**Rule**: If you have > 5 base measures × > 3 time-intelligence variants, use a Calculation Group.
+**Rule**: Prefer Calculation Groups for maintainability and consistency, not for raw performance. Benchmark with DAX Studio if performance is a concern.
 
 ### When Complex DAX Is Justified
 
@@ -177,34 +178,39 @@ Not all iterators are bad. Document the reason when using:
 
 ### Matrix vs Cards — The Performant Pattern
 
-> **Rule**: A single matrix visual with conditional formatting is always more performant than multiple individual card visuals showing the same data.
+> **Rule**: A single matrix visual with multiple measures usually generates fewer SSAS round-trips than multiple individual card visuals showing the same data. The saving is most pronounced on slow models or when measures are expensive. Validate with Performance Analyzer.
 
 | Approach | Queries Generated | Performance |
 |---|---|---|
-| 5 separate Card visuals (one per KPI) | 5 queries | ❌ Slow — 5 round-trips |
-| 1 Matrix with 5 measures as values | 1 query | ✅ Fast — single round-trip |
-| 1 Matrix styled to look like cards | 1 query | ✅ Fast + same visual effect |
+| 5 separate Card visuals (one per KPI) | 5 queries (run in parallel) | More round-trips; parallel execution may mask cost on fast models |
+| 1 Matrix with 5 measures as Values | 1 query | ✅ Single round-trip — preferred for 3+ related KPIs |
 
-**How to style a Matrix as KPI cards:**
-1. Matrix with no row/column headers (just Values)
-2. Remove grid lines, row/column totals
-3. Apply conditional formatting (background color, font size, icons)
-4. Result: visually indistinguishable from separate cards but single query
+**Caveat**: If each card has different filter context ("Filters on this visual"), the matrix consolidation is not semantically equivalent — each unique filter context requires its own query regardless of visual type. Consolidation works best when KPIs share identical filter context.
 
-**Other "consolidation" patterns:**
+**How to style a Matrix/Table as KPI tiles:**
+1. Use a Table or Multi-row Card visual with measures as values
+2. For Matrix: place a single-value categorical field on Rows; hide row headers via formatting
+3. Remove grid lines, totals, and column headers
+4. Apply conditional formatting: background colour, font size, KPI icons per cell
+5. Result: card-like appearance with fewer queries than separate Card visuals
+
+**Other consolidation patterns:**
 - 3 gauges → 1 clustered bar with reference lines
 - Multiple text boxes with measures → 1 table visual with measure names as rows
 - Separate charts per category → 1 chart with legend (or Small Multiples visual)
 
 ### Query Reduction Techniques
 
-| Technique | Queries Saved | How |
-|---|---|---|
-| **Disable visual interactions** | Up to 50% | Select visual → Format → Edit interactions → None for non-related visuals |
-| **Use page-level filters over slicers** | 1 per filter | Slicers are visuals with their own query; filters are metadata |
-| **Sync slicers sparingly** | N-1 per sync group | Each synced page loads the slicer query on navigation |
-| **Bookmarks over hidden pages** | Variable | Bookmarks toggle visibility; hidden pages still pre-load in some cases |
-| **Drillthrough over navigation** | All target visuals | Target page only queries when invoked, not on parent load |
+| Technique | Effect | Scope | How |
+|---|---|---|---|
+| **Reduce visual count per page** | Fewer queries on initial page load | Page load | Consolidate visuals (Matrix over Cards, drill-through for detail) |
+| **Use page-level filters over slicers** | 1 fewer query per slicer removed | Page load | Slicers are visuals with their own query; filters are metadata |
+| **Drillthrough over navigation** | Defers all target page queries | Page load | Target page only fires queries when invoked |
+| **Disable visual interactions** | Fewer queries on user click (cross-filter) | Interactive | Select visual → Format → Edit interactions → None for non-related visuals |
+| **Sync slicers sparingly** | Fewer queries on page navigation | Navigation | Each synced page loads the slicer query when navigated to |
+| **Use bookmarks to swap visuals on same page** | Avoids multiple visible visuals | Interactive | Toggle visibility instead of stacking separate visuals |
+
+> **Note**: Disabling visual interactions improves responsiveness after user selections (cross-filtering), but has no effect on initial page load. To improve page load, reduce visual count and slicer count.
 
 ### Visual Type Performance Ranking
 
@@ -213,7 +219,7 @@ From fastest to slowest for the same data volume:
 | Rank | Visual | Why |
 |---|---|---|
 | 1 | Card / KPI | Single scalar query |
-| 2 | Table / Matrix | Tabular scan, optimised engine path |
+| 2 | Multi-row Card / Table / Matrix | Tabular scan, well-optimised engine path |
 | 3 | Bar / Column chart | Group-by + aggregate, well-optimised |
 | 4 | Line chart (time series) | Date axis + aggregate — fast if date granularity is reasonable |
 | 5 | Scatter plot | Two measures + category — moderate |
@@ -238,8 +244,9 @@ Optimised: Only logically related visuals interact
 Instead of: Multiple visuals that conditionally appear (Show/Hide via bookmarks or rules)
 Use: Single visual with conditional formatting that changes colour/icon based on measure value
 
-- Fewer visuals on the canvas = fewer queries
-- Conditional formatting is client-side rendering (free)
+- Fewer visuals on the canvas = fewer queries on page load
+- Conditional formatting based on **static rules** (thresholds) is client-side and adds no query cost
+- Conditional formatting based on **measure values** may add columns to the visual query — still usually cheaper than separate visuals, but validate slow visuals with Performance Analyzer
 
 ---
 
@@ -325,13 +332,16 @@ Check:
 
 ## Performance SLAs (Organisation Defaults)
 
-| Metric | Target | Action Threshold |
-|---|---|---|
-| Page initial load | < 5 seconds | > 8 seconds = must optimise |
-| Slicer filter response | < 2 seconds | > 4 seconds = reduce cardinality or disable interactions |
-| Drill-through navigation | < 3 seconds | > 5 seconds = reduce target page visuals |
-| SSAS processing (nightly) | < 60% of window | > 80% = partition/incremental strategy needed |
-| Model RAM | < 50% of server RAM | > 70% = aggregation tables or column pruning |
+| Metric | Target | Action Threshold | Notes |
+|---|---|---|---|
+| Executive page initial load | < 3 seconds | > 5 seconds = must optimise | ≤ 8 visuals, warm cache |
+| Detail page initial load | < 5 seconds | > 8 seconds = must optimise | ≤ 12 visuals, warm cache |
+| Slicer filter response | < 2 seconds | > 4 seconds = reduce cardinality or disable interactions | Interactive — after user click |
+| Drill-through navigation | < 3 seconds | > 5 seconds = reduce target page visuals | Deferred rendering |
+| SSAS processing (nightly) | < 60% of window | > 80% = partition/incremental strategy needed | |
+| Model RAM | < 50% of server RAM | > 70% = aggregation tables or column pruning | Account for processing headroom |
+
+> **Warm vs cold cache**: First user after nightly processing hits cold SSAS cache and may experience 2–3× longer load. Consider adding cache-warming queries (scheduled DAX queries against key pages' measures) after processing completes.
 
 ---
 
@@ -346,7 +356,7 @@ Check:
 ### SSAS Layer
 - [ ] No unused columns in SSAS views (every column in model is referenced by a measure, relationship, or slicer)
 - [ ] High-cardinality columns (> 1M distinct) are hidden or in drill-through-only tables
-- [ ] Value encoding forced on high-aggregate numeric columns
+- [ ] Encoding hints applied only after VertiPaq Analyzer review and benchmarking
 - [ ] Bidirectional relationships: 0 (or documented justification)
 - [ ] Partition strategy matches table size (see partition table above)
 

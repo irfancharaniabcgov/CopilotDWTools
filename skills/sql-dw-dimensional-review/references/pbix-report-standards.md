@@ -292,8 +292,8 @@ Classification: <InformationType> / <SensitivityLabel>  (if applicable)
 
 | Report Type | Max Visuals | Notes |
 |---|---|---|
-| Executive summary (KPI page) | 6–8 | Users expect < 3 second load |
-| Detailed analysis page | 10–12 | Users accept slightly longer load |
+| Executive summary (KPI page) | 6–8 | Target < 3 second load |
+| Detailed analysis page | 10–12 | Target < 5 second load |
 | Drill-through page | 8–10 | Only queried on demand (deferred) |
 | Tooltip page | 1–3 | Must render < 1 second (shown on hover) |
 
@@ -301,20 +301,21 @@ Classification: <InformationType> / <SensitivityLabel>  (if applicable)
 
 ### 7.2 Matrix over Cards — Consolidation Pattern
 
-> **Rule**: A single matrix with conditional formatting is always more performant than multiple individual card visuals showing the same data.
+> **Rule**: A single Matrix/Table with multiple measures usually generates fewer SSAS round-trips than multiple Card visuals showing the same data. The saving is most pronounced when measures are expensive or the model is slow. Validate with Performance Analyzer.
 
-| Approach | DAX Queries | Performance |
+| Approach | DAX Queries | Notes |
 |---|---|---|
-| 5 separate Card visuals (one per KPI) | 5 queries | ❌ 5 round-trips to SSAS |
-| 1 Matrix with 5 measures as Values | 1 query | ✅ Single round-trip |
-| 1 Matrix styled to look like cards | 1 query | ✅ Same visual effect, 80% fewer queries |
+| 5 separate Card visuals (one per KPI) | 5 queries (parallel) | More round-trips; parallel execution may mask cost on fast models |
+| 1 Matrix with 5 measures as Values | 1 query | ✅ Preferred for 3+ related KPIs sharing filter context |
 
-**How to style a Matrix as KPI cards:**
-1. Place measures in Values only (no Row/Column fields)
-2. Remove all grid lines, row/column headers, and totals
-3. Apply conditional formatting: background colour, font size per value
-4. Add data bars or KPI icons via conditional formatting rules
-5. Result: visually indistinguishable from individual cards
+**Caveat**: Consolidation works best when KPIs share identical filter context. If each card has different "Filters on this visual", each unique filter context requires its own query regardless.
+
+**How to style a Table/Matrix as KPI tiles:**
+1. Use a Table or Multi-row Card with measures as values
+2. For Matrix: place a single-value categorical field on Rows; hide the row header via formatting
+3. Remove grid lines, totals, and column headers
+4. Apply conditional formatting: background colour, font size, KPI icons per cell
+5. Result: card-like appearance with fewer round-trips
 
 **Other consolidation patterns:**
 | Instead of... | Use... | Queries saved |
@@ -324,17 +325,20 @@ Classification: <InformationType> / <SensitivityLabel>  (if applicable)
 | Separate charts per category | 1 chart with Legend (or Small Multiples) | N - 1 |
 | KPI visual per metric | 1 Matrix with conditional icons | N - 1 |
 
-**Agent rule**: When recommending KPI display for 3+ related metrics, always recommend the Matrix consolidation pattern first. If the user prefers individual cards, note the performance trade-off in the decisions register.
+**Agent rule**: When recommending KPI display for 3+ related metrics sharing filter context, recommend the consolidation pattern first. If the user prefers individual cards, note the trade-off in the decisions register.
 
 ### 7.3 Query Reduction Techniques
 
-| Technique | Impact | How to apply |
-|---|---|---|
-| **Disable visual interactions** | High — up to 50% fewer queries | Format → Edit interactions → set to **None** for visuals that don't analytically relate |
-| **Page-level filters over Slicers** | Medium — 1 query per slicer removed | Slicers are visuals with their own query; page filters are metadata (no query) |
-| **Sync slicers sparingly** | Medium — each synced page loads the slicer | Only sync when user expectation requires persistent selection across pages |
-| **Drillthrough over navigation** | High — defers all target page queries | Target page only fires queries when invoked, not when parent loads |
-| **Reduce slicer cardinality** | Medium | Top N filter on slicer, or group into bands (e.g., age ranges not individual ages) |
+| Technique | Scope | Impact | How to apply |
+|---|---|---|---|
+| **Reduce visual count** | Page load | High — directly reduces initial queries | Consolidate visuals; use drill-through for detail |
+| **Page-level filters over Slicers** | Page load | Medium — 1 query per slicer removed | Slicers are visuals with their own query; page filters are metadata (no query) |
+| **Drillthrough over navigation** | Page load | High — defers all target page queries | Target page only fires queries when invoked |
+| **Disable visual interactions** | Interactive | Medium — fewer queries after user clicks | Format → Edit interactions → **None** for non-related visuals |
+| **Sync slicers sparingly** | Navigation | Medium — each synced page loads slicer | Only sync when persistent selection is essential |
+| **Reduce slicer cardinality** | Interactive | Medium | Top N filter on slicer, or group into bands |
+
+> **Note**: Disabling interactions reduces queries triggered by cross-filter clicks, not initial page load. To improve page load time, reduce visual count and slicer count.
 
 **Agent rule**: During Phase 9 (Refresh & Performance), recommend disabling interactions for non-related visuals. Document which interactions are active and why.
 
@@ -344,8 +348,8 @@ From fastest to slowest for the same data volume:
 
 | Rank | Visual | Notes |
 |---|---|---|
-| 1 | Card / Multi-row Card | Single scalar query — fastest |
-| 2 | Table / Matrix | Tabular scan, well-optimised engine path |
+| 1 | Card / KPI | Single scalar query — fastest |
+| 2 | Multi-row Card / Table / Matrix | Tabular scan, well-optimised engine path |
 | 3 | Bar / Column / Stacked Bar | Group-by + aggregate — very fast |
 | 4 | Line chart | Date axis aggregation — fast if grain is reasonable (month/quarter) |
 | 5 | Combo chart | Two measures on same axis — slightly more than line |
@@ -381,9 +385,11 @@ For each page during design:
 
 | Instead of... | Use... | Why faster |
 |---|---|---|
-| Multiple visuals shown/hidden by bookmarks | 1 visual with conditional format rules | Fewer visuals = fewer queries; CF is client-side |
+| Multiple visuals shown/hidden by bookmarks | 1 visual with conditional format rules | Fewer visuals = fewer page-load queries |
 | Separate "good/bad" indicator cards | Conditional background colour on a Matrix cell | 1 query vs N queries |
 | Traffic-light icons as separate images | KPI conditional formatting (icons column) | No image rendering overhead |
+
+> **Note**: Conditional formatting based on static thresholds is client-side (no query cost). Formatting driven by measure values may add columns to the visual query — still usually cheaper than separate visuals, but validate slow visuals with Performance Analyzer.
 
 ### 7.8 Performance Analyzer Workflow
 
@@ -401,3 +407,5 @@ Breakdown:
 - **Other** time > 1s → SSAS capacity or network latency
 
 **Agent rule**: When reviewing a report, if Performance Analyzer data is available (screenshot or export), use it to prioritise findings by actual measured impact rather than theoretical concerns.
+
+> **PBIRS limitation**: Performance Analyzer is only available in Power BI Desktop during development. For deployed reports on PBIRS, capture query timings via SSAS Extended Events, DMVs (`$System.DISCOVER_SESSIONS`, `$System.DISCOVER_COMMANDS`), or DAX Studio Server Timings connected to the production SSAS instance.

@@ -214,7 +214,9 @@ Check for `design/session-state.md`. If it exists, this is a **continuation of a
    - If the user says **yes**: rescan the relevant targets (re-run Mode P for source changes, re-query DW inventory for DW changes, re-read TMDL for model changes). Compare results against the entity map / decisions register and surface any deltas before continuing.
    - If the user says **no**: proceed from where the session left off.
    - If the user says **not sure**: run a lightweight freshness check — re-query DW table inventory and compare against `design/entity-map.md`. If no structural changes detected, proceed. If changes found, surface them before continuing.
-4. Check for any **deferred questions** (items the user said "I'll get back to you on that"): *"Last time you deferred [item]. Do you have an answer now, or should we continue deferring?"*
+4. Check for **deferred questions** — present using the Deferred Question Protocol resume prompt (grouped by role and impact): *"You have [N] deferred items ([X] blocking, [Y] advisory). Should we review the deferred list first, or continue from where we left off?"*
+   - If the user wants to review: present grouped by `Who can answer`. Resolve what they can, update spec/decisions for resolved items, keep deferring the rest.
+   - If the user wants to continue: skip deferred items and proceed.
 5. Resume at the in-progress phase. Do not re-ask questions that were already confirmed in prior sessions (those are in `design/decisions.md`).
 
 If `design/session-state.md` does not exist, proceed normally (new session).
@@ -248,7 +250,7 @@ When pausing:
   - Questions remaining: [list]
 
 ## Deferred Items
-- ❓ [Item ID]: [description] — deferred because: [reason]
+- ❓ [Item ID]: [description] — deferred because: [reason] — **impact**: [blocking / advisory]
 [... list all items the user said they'd come back to ...]
 
 ## Open Questions (awaiting user input)
@@ -263,6 +265,74 @@ When pausing:
 2. **Write partial `design/spec.md`** — capture everything confirmed so far with `[INCOMPLETE — Phase N+]` markers for sections not yet reached. If spec already exists, update it in place.
 3. **Update `design/decisions.md`** — ensure all confirmed answers from this session are persisted (marked DRAFT if pre-sign-off).
 4. Say to the user: *"Session saved. We completed [summary]. When you're ready to continue, invoke me again — I'll pick up from [specific next step]. If anything changes in the source systems or business rules before then, let me know when we resume and I'll rescan."*
+
+---
+
+### Deferred Question Protocol
+
+When a user defers a question (says "I don't know", "I'll need to check with [someone]", "come back to that", "park it", "skip for now"), follow this protocol:
+
+#### Step 1 — Classify the deferral impact
+
+| Impact | Definition | Examples |
+|---|---|---|
+| **Blocking** | Answer changes the data model shape, grain, or visual design — continuing without it risks rework | Grain definition, SCD type, semi-additive vs additive, RLS scope, partition strategy, business key identification |
+| **Advisory** | Answer influences a detail but does not change the structural design — can proceed with a reasonable default and revisit later | Refresh cadence (default: nightly), history range (default: 2 years), exact filter label text, colour scheme preference, specific user count |
+
+Tell the user the classification: *"I'll park that as a **[blocking/advisory]** deferral. [If blocking: This may require rework later if the answer changes the model structure. / If advisory: We can proceed with a reasonable default and revisit.]"*
+
+#### Step 2 — Record in session state
+
+Add to the Deferred Items section with impact classification:
+```markdown
+- ❓ D-[N]: [question text] — deferred because: [user's reason] — **impact**: blocking
+  - Phase: [N] — [Phase Name]
+  - Default assumed (if advisory): [default value used to continue]
+  - Who can answer: [role/person if stated, else "unknown"]
+```
+
+#### Step 3 — Accumulation gate
+
+**After each deferral**, count blocking deferrals for the *current and future phases*:
+
+- **1–2 blocking deferrals**: Note them and continue. Say: *"Noted — [N] blocking question(s) deferred so far. We can continue but may need to revisit before the spec is final."*
+- **3+ blocking deferrals**: **Stop and warn.** Say:
+
+  > *"We now have [N] blocking questions deferred. These affect [list impacted areas: grain / model shape / security / performance / etc.]. Continuing may produce a specification that requires significant rework once answers arrive.*
+  >
+  > *Options:*
+  > 1. *Pause here and resume when you (or the right people) have answers*
+  > 2. *Review the deferred list now — maybe some can be resolved or narrowed*
+  > 3. *Continue anyway — I'll flag all assumptions clearly in the spec and we'll rework as needed*"
+
+  The user chooses. If they choose option 3, mark each blocking deferral with `[USER ACCEPTED REWORK RISK]` in the session state.
+
+#### Step 4 — Phase-end gate
+
+At the **end of each phase** (before moving to next), if there are any blocking deferrals from that phase:
+
+> *"Before moving to Phase [N+1] — Phase [N] has [X] blocking deferral(s): [list]. These will affect downstream phases. Continue with assumptions, or pause to get answers?"*
+
+#### Step 5 — Resume prompt
+
+On session resume (after the freshness check in step 3 of the Resume Protocol), **always** ask:
+
+> *"You have [N] deferred items ([X] blocking, [Y] advisory). Should we:*
+> 1. *Review the deferred list first (recommended if you have answers ready)*
+> 2. *Continue from where we left off (deferred items stay parked)*"
+
+If the user has brought answers, resolve them and update the spec/decisions register before continuing.
+
+#### Multi-role awareness
+
+If the user mentions different people/roles are needed for different answers (e.g., "the architect would know that" or "I'd need to ask the business"), track `Who can answer` in each deferral. On resume, group deferred items by role:
+
+> *"Deferred items by role needed:*
+> - *Architect: [2 items — grain for FactX, partition strategy]*
+> - *Business Analyst: [1 item — definition of 'active client']*
+> - *Unknown: [1 item — refresh cadence]*
+>
+> *Are any of these people available this session?"*
 
 ---
 
@@ -711,7 +781,7 @@ Ask all of the following questions:
 - **If a nightly refresh is not acceptable**, how frequently does the data need to be updated? (Every hour? Every 4 hours? At specific times of day — e.g., after a morning batch run at 7am?)
 - What **date range of history** is needed? (Last 2 years? Since the system went live? Since inception?)
 - How many users do you expect to be running this report, and how frequently?
-- Is there a **performance expectation**? (For example: "The report should load within 5 seconds for a typical filter selection") — If not stated, the default SLA for this organisation is 5 seconds for a filtered view with less than 5 million rows in the underlying fact table.
+- Is there a **performance expectation**? (For example: "The report should load within 5 seconds for a typical filter selection") — If not stated, use the organisation defaults from `performance-end-to-end.md`: executive pages < 3 seconds, detail pages < 5 seconds (warm cache, within visual budget).
 
 *Refresh cadence implications for the architect:*
 - *Nightly → standard SQL Agent job + ADO nightly pipeline; SSAS full or incremental process nightly*

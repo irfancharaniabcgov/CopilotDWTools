@@ -351,7 +351,9 @@ At the start of every invocation, check for `design/documentation-session-state.
      - Schema changes to objects already documented → flag for user review ("Column `X` was renamed to `Y` since last session — update the description?")
    - If **no**: proceed from the saved worklist position.
    - If **not sure**: run a fast diff-only rescan (Q-SRC-1 / Q-DW-1 only — table-level inventory, no per-column work). Compare table count and names against the saved worklist. If no structural changes, proceed. If changes found, expand to full coverage audit on affected tables only.
-4. Check for **deferred items**: *"Last time you deferred [object] because [reason]. Ready to tackle it now, or keep deferring?"*
+4. Check for **deferred items** — present grouped by role (see Deferred Question Protocol below): *"You have [N] deferred items. Should we review the deferred list first, or continue from where we left off?"*
+   - If the user wants to review: present the list grouped by `Who Can Answer`. Resolve what they can, keep deferring what they can't.
+   - If the user wants to continue: skip deferred items and proceed.
 5. Resume processing from the next `InProgress` or `Pending` table in the worklist. Skip `Done`, `Skipped`, and `OutOfScope` items.
 
 **If it does not exist**: proceed normally (new session).
@@ -398,9 +400,9 @@ When pausing:
 - `OutOfScope` — user explicitly excluded during triage; do not process on resume
 
 ## Deferred Items
-| Object | Reason | Deferred On |
-|---|---|---|
-| dbo.LegacyExport.StatusCode | User needs to check with vendor | [date] |
+| Object | Reason | Deferred On | Impact | Who Can Answer |
+|---|---|---|---|---|
+| dbo.LegacyExport.StatusCode | User needs to check with vendor | [date] | blocking | Vendor contact |
 [...]
 
 ## Conventions Applied (do not re-detect)
@@ -416,6 +418,48 @@ When pausing:
 2. **Update `design/documentation-coverage.md`** — write current coverage stats so the delta is visible next session.
 3. **Persist confirmed conventions** to `design/decisions.md` under `## Documentation Conventions` (if not already written).
 4. Say to the user: *"Session saved. We documented [N] tables ([X] columns) this session, bringing coverage from [A]% to [B]%. [M] tables remain. When you're ready to continue, invoke me again — I'll pick up from [next table]. If the schema changes before then, let me know and I'll rescan."*
+
+### Deferred Question Protocol
+
+When a user defers an object or question (says "I don't know what that column means", "I'll need to check with the vendor", "come back to that one", "skip it for now"), follow this protocol:
+
+#### Classify the deferral impact
+
+| Impact | Definition | Examples |
+|---|---|---|
+| **Blocking** | The deferred object is a parent/FK target referenced by other tables, or understanding it is required to document dependent objects correctly | Bridge tables, shared dimension columns referenced in multiple facts, lookup tables with no documentation |
+| **Advisory** | The deferred object is self-contained — skipping it does not affect other documentation work | Individual columns on leaf tables, isolated audit tables, single-use lookup values |
+
+Tell the user: *"I'll defer [object] as **[blocking/advisory]**. [If blocking: Other tables reference this — I may need to come back to it before I can fully document dependent objects. / If advisory: This won't affect other documentation work.]"*
+
+#### Accumulation awareness
+
+At the end of each batch presentation, if deferred items have accumulated:
+
+- **< 3 deferred items**: Note count and continue
+- **3+ deferred items (any blocking)**: Warn:
+
+  > *"We've deferred [N] items so far ([X] blocking). The blocking items may affect how I describe [list dependent tables]. Should we:*
+  > 1. *Review the deferred list now — maybe some can be resolved or narrowed*
+  > 2. *Continue — I'll mark dependent descriptions as provisional*
+  > 3. *Pause and resume when the right people are available"*
+
+#### Resume prompt
+
+On session resume (after freshness check, step 4), present deferred items grouped by who can answer:
+
+> *"You have [N] deferred items ([X] blocking, [Y] advisory):*
+>
+> *By role:*
+> - *Vendor: [list]*
+> - *DBA / Architect: [list]*
+> - *Business owner: [list]*
+>
+> *Should we:*
+> 1. *Review the deferred list first (recommended if you have answers)*
+> 2. *Continue documenting from where we left off (deferred items stay parked)"*
+
+---
 
 ### Documentation Worklist Persistence
 

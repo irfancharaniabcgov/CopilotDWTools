@@ -260,19 +260,19 @@ LEFT JOIN Dimension.Region r ON s.RegionCode = r._SourceRegionCode;
 
 | Scenario | Row Count | Recommended Strategy |
 |---|---|---|
-| Small dimension (reference data) | < 50K rows | Full truncate/reload — simplest |
-| Medium dimension (SCD Type 2) | 50K–500K rows | Incremental by change date; MERGE for SCD2 |
+| Small dimension (SCD Type 1 / reference) | < 50K rows | Full truncate/reload — safe for Type 1 (no history) |
+| Dimension (SCD Type 2) any size | Any | Incremental with change detection — full reload destroys history |
 | Large dimension | > 500K rows | Incremental + hash-based change detection |
 | Small fact table | < 5M total rows | Full reload or simple DELETE/INSERT of changed |
 | Medium fact table | 5M–50M total rows | Incremental (watermark) DELETE/INSERT |
-| Large fact table | > 50M total rows | Partition switching on current period |
+| Large fact table | > 50M total rows | Partition switching on current period (consider from 10M+ if load window is constrained) |
 
 ### Restartability
 
 Every load SP must be **idempotent** — re-running it produces the same result as running it once:
 
 - **Staging**: `TRUNCATE TABLE` before insert ensures clean state on retry
-- **Dimensions (SCD Type 2)**: expire/insert pattern is naturally idempotent (re-running re-expires and re-inserts same rows)
+- **Dimensions (SCD Type 2)**: idempotent only when the load uses stable change hashes or deterministic effective dates, skips unchanged rows, and enforces one-current-row-per-natural-key (e.g., filtered unique index on `IsCurrent = 1`). Without these guards, a rerun can create duplicate current versions or shift effective dates.
 - **Facts (DELETE/INSERT)**: DELETE by source key before INSERT ensures no duplicates on retry
 - **Lineage**: `Internal.Lineage` Status = 'P' (pending) → 'S' (success) or 'F' (failed); failed runs leave the high-water mark unchanged so next run retries the same window
 
@@ -319,8 +319,9 @@ CREATE NONCLUSTERED INDEX IX_SalesOrder_SourceID ON Staging.SalesOrder (_SourceS
 | Index rebuild (maintenance) | 4 | Standard maintenance window guidance |
 
 ```sql
--- Example: fact load query with MAXDOP hint for SSAS processing
-SELECT * FROM [SSAS].[SalesOrder] OPTION (MAXDOP 4);
+-- Example: SSAS processing query with MAXDOP hint
+SELECT [OrderDateKey], [CustomerKey], [ProductKey], [Quantity], [UnitPrice], [SalesAmount]
+FROM [SSAS].[SalesOrder] OPTION (MAXDOP 4);
 ```
 
 ---

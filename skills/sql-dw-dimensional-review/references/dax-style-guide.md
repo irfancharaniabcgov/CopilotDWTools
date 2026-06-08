@@ -407,14 +407,14 @@ RETURN DIVIDE(_Current - _PY, ABS(_PY))
 - Use approximate: `APPROXIMATE DISTINCTCOUNT` (Power BI Service only — not available in SSAS on-prem)
 - Reduce granularity: count at month level instead of day
 
-### Calculation group efficiency
+### Calculation group benefits
 
-Calculation groups are more performant than duplicated measures because:
-- Single `SELECTEDMEASURE()` evaluation per calc item vs. N separate measure evaluations
-- Engine optimises the execution plan across items
-- Fewer Storage Engine queries when users switch time periods via slicer
+Calculation groups reduce measure proliferation and improve maintainability and consistency. Performance is comparable to hand-written equivalents — `SELECTEDMEASURE()` still evaluates the full measure in context. Their value is governance, not speed:
+- > 5 base measures × > 3 time-intelligence variants → single source of truth for time logic
+- One fix applies to all measures (consistency guarantee)
+- Reduced model clutter and easier discoverability
 
-**Rule**: If you have > 5 base measures and > 3 time-intelligence variants (YTD, PY, YoY, QTD, etc.), always use a Calculation Group instead of measure proliferation.
+**Rule**: Prefer Calculation Groups for maintainability when measure variants proliferate. Benchmark with DAX Studio if performance is a concern — they are not inherently faster.
 
 ### Agent review: performance flags
 
@@ -423,9 +423,9 @@ Calculation groups are more performant than duplicated measures because:
 | `SUMX` / `COUNTX` on table > 5M rows | 🟠 HIGH | Consider upstream pre-computation |
 | Measure reference inside `SUMX` / `FILTER` / `ADDCOLUMNS` | 🟠 HIGH | Extract to VAR if constant across rows |
 | Same sub-expression repeated without VAR | 🟡 MEDIUM | Assign to VAR |
-| `DISTINCTCOUNT` on column > 1M distinct | 🟡 MEDIUM | Pre-aggregate or reduce grain |
-| > 15 time-intelligence measure copies without Calculation Group | 🟡 MEDIUM | Convert to Calculation Group |
-| `FILTER(ALL(LargeTable), single condition)` without documented exception | 🟠 HIGH | Use `CALCULATE` with filter argument |
+| `DISTINCTCOUNT` on column > 1M distinct | 🟡 MEDIUM | Pre-aggregate at load time (APPROXIMATEDISTINCTCOUNT unavailable on-prem) |
+| > 15 time-intelligence measure copies without Calculation Group | 🟡 MEDIUM | Convert to Calculation Group (maintainability) |
+| `FILTER(ALL(FactTable), condition)` without documented exception | 🟠 HIGH | Filter on dimension column directly in CALCULATE |
 
 ## PBIRS live-connection constraints
 
