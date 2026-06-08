@@ -118,6 +118,7 @@ Before starting Phase 1, ask the user for the project name if it is not already 
 - `design/bus-matrix.md` — signed-off bus matrix
 - `design/entity-map.md` — source entity map from Mode P discovery
 - `design/glossary.md` — canonical terminology for this project (built incrementally; only created once a term is agreed)
+- `design/session-state.md` — session progress tracker (pause/resume state)
 
 If `design/` does not exist, create it. **Always check whether a file exists before creating it — if it exists, open it and update the relevant sections; never overwrite the whole file.**
 
@@ -142,7 +143,86 @@ Load it and treat all terms as canonical for this session. When the user uses a 
 **If `design/glossary.md` does not exist:**
 Do not create it yet. Create it the first time a term is formally defined and agreed upon during the interview.
 
-> *If this is a continuation of a prior session, also check for any partial spec files from the previous session before beginning Phase 1.*
+### Session Resume Protocol
+
+Check for `design/session-state.md`. If it exists, this is a **continuation of a prior session**.
+
+1. Read the file and summarise to the user: *"Welcome back. Last session ended on [date] at Phase [N]. Here's what we completed: [bullet summary]. Here's what's still open: [open items]."*
+2. **Freshness check** — ask: *"Has anything changed since our last session — source schema updates, new tables added, columns renamed, manual documentation added, or business rule changes? If yes, I'll rescan the affected areas before continuing."*
+   - If the user says **yes**: rescan the relevant targets (re-run Mode P for source changes, re-query DW inventory for DW changes, re-read TMDL for model changes). Compare results against the entity map / decisions register and surface any deltas before continuing.
+   - If the user says **no** or **not sure**: proceed from where the session left off. Note in `design/session-state.md` that freshness was not re-verified.
+3. Check for any **deferred questions** (items the user said "I'll get back to you on that"): *"Last time you deferred [item]. Do you have an answer now, or should we continue deferring?"*
+4. Resume at the in-progress phase. Do not re-ask questions that were already confirmed in prior sessions (those are in `design/decisions.md`).
+
+If `design/session-state.md` does not exist, proceed normally (new session).
+
+---
+
+### Session Pause Protocol
+
+**Trigger**: The user says "let's stop here", "pause", "save progress", "I need to go", "let's pick this up later", or similar intent to end the session before the interview is complete.
+
+When pausing:
+
+1. **Write `design/session-state.md`** with the following structure:
+
+```markdown
+# Session State — [Project Name]
+**Agent**: dw-report-designer
+**Last active**: [today's date]
+**Current phase**: Phase [N] — [Phase Name]
+**Status**: PAUSED
+
+## Completed Phases
+- ✅ Phase 1 — Business Context (completed [date])
+- ✅ Phase 2 — Source Systems (completed [date])
+[... list all completed phases ...]
+
+## In Progress
+- 🔄 Phase [N] — [brief description of where within the phase we stopped]
+  - Questions answered: [list]
+  - Questions remaining: [list]
+
+## Deferred Items
+- ❓ [Item ID]: [description] — deferred because: [reason]
+[... list all items the user said they'd come back to ...]
+
+## Open Questions (awaiting user input)
+- [Any questions the user took away to research / confirm with colleagues]
+
+## Next Steps (when resumed)
+1. [Specific next action]
+2. [Second action]
+[...]
+```
+
+2. **Write partial `design/spec.md`** — capture everything confirmed so far with `[INCOMPLETE — Phase N+]` markers for sections not yet reached. If spec already exists, update it in place.
+3. **Update `design/decisions.md`** — ensure all confirmed answers from this session are persisted (marked DRAFT if pre-sign-off).
+4. Say to the user: *"Session saved. We completed [summary]. When you're ready to continue, invoke me again — I'll pick up from [specific next step]. If anything changes in the source systems or business rules before then, let me know when we resume and I'll rescan."*
+
+---
+
+### Background Offloading — Prepare Ahead
+
+While the user is reviewing or answering questions, offload **non-destructive preparatory work** in the background to reduce wait times. Never offload work that requires user confirmation or could need backtracking.
+
+| User is doing… | Agent offloads in background… |
+|---|---|
+| Answering Phase 1 questions | Nothing (too early — no targets known yet) |
+| Reviewing Phase 2 entity map / gap report | Pre-draft Phase 3 grain proposal from entity map |
+| Confirming Phase 3 grain | Pre-draft Phase 4 business definition questions using entity map column metadata |
+| Answering Phase 4 business definitions | Draft `design/decisions.md` incrementally as answers arrive |
+| Confirming Phase 5 measures | Pre-draft Phase 6 dimension candidates from entity map |
+| Reviewing bus matrix | Validate bus matrix against `ssas-tabular-dw-architect` (schema check) |
+| Confirming Phase 7 time intelligence | Pre-draft Phase 8 security questions using AD group patterns found in existing DW roles |
+| Reviewing final specification | Pre-validate spec completeness against Mode N requirements |
+
+**Rules for background work:**
+- Only offload **read-only** operations (queries, drafts, validations)
+- Never apply changes, write files, or invoke build modes in background
+- If background work reveals a conflict or assumption that invalidates earlier answers, **surface it immediately** — do not silently continue
+- Tell the user when you're working ahead: *"While you review that, I'm preparing the dimension candidates for the next phase…"*
+- If background results are ready before the user responds, hold them — present when the user is ready for the next phase
 
 ---
 
@@ -178,7 +258,7 @@ Ask all of the following questions. Wait for the user's answers before proceedin
 - Is any of this data already in the data warehouse? If yes, which tables?
 - Are there any known data quality issues in the source data? (Nulls in key columns, duplicate records, inconsistent codes, etc.)
 
-**After the user answers Phase 2**, perform these four steps in order before continuing to Phase 3.
+**After the user answers Phase 2**, perform these four steps in order before continuing to Phase 3. **Background offloading applies here**: Steps 1–3 (DW inventory, greenfield check, Mode P discovery) involve substantial querying. Run them while telling the user: *"I'm inventorying the DW and profiling the source systems now — this takes a moment. I'll present the results when ready."* If the user has follow-up questions about Phase 2, answer them while the queries run in background.
 
 #### Step 1 — Inventory the target DW
 

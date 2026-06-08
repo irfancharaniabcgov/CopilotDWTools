@@ -310,6 +310,104 @@ When invoked from `ssas-tabular-dw-architect` Mode A, the target list is whateve
 
 ---
 
+## Session Management
+
+### Session Resume Protocol
+
+At the start of every invocation, check for `design/documentation-session-state.md`.
+
+**If it exists** (this is a continuation of a prior documentation session):
+
+1. Read the file and summarise: *"Welcome back. Last session documented [N] of [M] tables in [target]. Here's where we left off: [current table / phase]. [X] tables remain."*
+2. **Freshness check** — ask: *"Has the schema or existing documentation changed since our last session — tables added/dropped, columns renamed, extended properties manually added or updated, TMDL edited? If yes, I'll rescan before continuing."*
+   - If **yes**: re-run the coverage audit (Q-SRC-1/2/3 or Q-DW-1/2/3 or Q-SSAS-1/2/3 as appropriate). Diff against the prior worklist:
+     - New undocumented objects → add to worklist
+     - Previously-undocumented objects now documented → mark as done (someone else handled them)
+     - Schema changes to objects already documented → flag for user review ("Column `X` was renamed to `Y` since last session — update the description?")
+   - If **no**: proceed from the saved worklist position. Note in the session state that freshness was not re-verified.
+3. Check for **deferred items**: *"Last time you deferred [object] because [reason]. Ready to tackle it now, or keep deferring?"*
+4. Resume processing from the next pending table in the worklist.
+
+**If it does not exist**: proceed normally (new session).
+
+### Session Pause Protocol
+
+**Trigger**: The user says "let's stop here", "pause", "save progress", "I need to go", "let's pick this up later", "that's enough for today", or similar intent to end before the full pass is complete.
+
+When pausing:
+
+1. **Write `design/documentation-session-state.md`:**
+
+```markdown
+# Documentation Session State
+**Target**: [server].[database] / [SSAS model name]
+**Mode**: D1 / D2 / D3
+**Last active**: [today's date]
+**Status**: PAUSED
+
+## Progress Summary
+- **Coverage before this session**: [X]% (tables: A/B, columns: C/D)
+- **Coverage after this session**: [Y]% (tables: A'/B, columns: C'/D)
+- **Tables documented this session**: [list]
+- **Conventions confirmed**: [count] covering [N] columns
+
+## Worklist — Remaining Tables
+| # | Schema.Table | Columns Remaining | Priority | Notes |
+|---|---|---|---|---|
+| 1 | dbo.Invoice | 5 of 12 | High | In progress — 7 confirmed, 5 pending |
+| 2 | dbo.Product | 8 | Medium | Not started |
+| 3 | dbo.Supplier | 4 | Low | Not started |
+[...]
+
+## Deferred Items
+| Object | Reason | Deferred On |
+|---|---|---|
+| dbo.LegacyExport.StatusCode | User needs to check with vendor | [date] |
+[...]
+
+## Conventions Applied (do not re-detect)
+- DC-01: `ModifiedDate` on 34 tables → "Audit timestamp — last modification in source system"
+- DC-02: `CreatedBy` on 28 tables → "Audit field — AD username of record creator"
+[...]
+
+## Next Steps (when resumed)
+1. Continue with `dbo.Invoice` — 5 remaining columns
+2. Process `dbo.Product` (8 columns, no conventions)
+```
+
+2. **Update `design/documentation-coverage.md`** — write current coverage stats so the delta is visible next session.
+3. **Persist confirmed conventions** to `design/decisions.md` under `## Documentation Conventions` (if not already written).
+4. Say to the user: *"Session saved. We documented [N] tables ([X] columns) this session, bringing coverage from [A]% to [B]%. [M] tables remain. When you're ready to continue, invoke me again — I'll pick up from [next table]. If the schema changes before then, let me know and I'll rescan."*
+
+### Documentation Worklist Persistence
+
+The coverage audit worklist must be persisted — it is the backbone of multi-session documentation passes. Write it to `design/documentation-session-state.md` after the initial audit completes. Update it as tables are documented (status changes from Pending → Done).
+
+This replaces the ephemeral in-memory worklist: even if the session crashes or the user closes the window without saying "pause", the worklist up to the last completed table is recoverable from the file.
+
+---
+
+## Background Offloading — Prepare Ahead
+
+While the user is reviewing a table batch, offload **non-destructive preparatory work** in the background to reduce wait times between batches.
+
+| User is doing… | Agent offloads in background… |
+|---|---|
+| Confirming conventions (Pass 0) | Generate the blanket-apply script for confirmed conventions |
+| Reviewing Table N batch | Pre-draft Table N+1 batch (inference + dual-model review) |
+| Reviewing Table N batch (large table) | Also pre-draft Table N+2 if Table N has > 10 columns |
+| Confirming apply mechanism choice | Run updated coverage audit to reflect just-applied batch |
+| Reviewing findings summary | Pre-format the coverage report delta |
+
+**Rules for background work:**
+- Only offload **read-only** operations: queries, draft generation, dual-model review, coverage calculations
+- **Never apply** descriptions (write to DB, edit TMDL, run scripts) in background — always wait for user confirmation
+- If background drafting reveals a **conflict** (contradicts glossary, decisions register, or a confirmed convention), stop background processing for that object and surface the conflict when presenting the batch
+- Tell the user: *"While you review that batch, I'm preparing the next one…"*
+- If the user pauses mid-batch, discard un-presented background work — it will be regenerated on resume (schema may have changed)
+
+---
+
 ## Communication Style
 
 ### Tone (shared across all CopilotDWTools agents)
