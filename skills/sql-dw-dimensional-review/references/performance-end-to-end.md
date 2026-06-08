@@ -330,6 +330,20 @@ Check:
 - FE duration (shorter is better — DAX simplicity)
 - Materialisations (0 is ideal — each means a temp table)
 
+### Step 5: PBIRS / Production Diagnostics
+
+Performance Analyzer is only available in Power BI Desktop. For deployed reports on PBIRS with SSAS live connection, use server-side tools:
+
+| Tool | What it captures | When to use |
+|---|---|---|
+| **DAX Studio → Server Timings** (connected to SSAS) | SE/FE split, query plan, materialisations for a specific measure | Developer reproducing a reported slow query |
+| **SSAS Extended Events** (`QueryEnd`, `QueryBegin`) | All queries hitting the model — duration, user, DAX text | Ongoing monitoring; identify top-N slow queries across all users |
+| **SSAS DMVs** (`$System.DISCOVER_SESSIONS`, `DISCOVER_COMMANDS`) | Active sessions, running queries, memory pressure | Real-time "who/what is hitting the server now" |
+| **PBIRS Execution Log** (`ExecutionLog3` view in `ReportServer` DB) | Report render time, data retrieval time, rows returned, parameters | "Which published reports are slow for end users?" |
+| **SQL Server Query Store / Extended Events** (on the DW) | SSAS processing queries hitting the DW engine | Processing window optimisation |
+
+**Agent rule**: When reviewing performance of a deployed report (not a .pbix in Desktop), recommend SSAS Extended Events + `ExecutionLog3` as the primary diagnostic path. Do not tell users to use Performance Analyzer for production troubleshooting.
+
 ---
 
 ## Performance SLAs (Organisation Defaults)

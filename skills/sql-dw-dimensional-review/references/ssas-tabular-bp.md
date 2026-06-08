@@ -171,6 +171,33 @@ relationship
     isActive: false   crossFilteringBehavior: oneDirection
 ```
 
+### Role-Playing Dimensions — Design Trade-off (SQLBI guidance)
+
+Two approaches exist for handling multiple date relationships (OrderDate, ShipDate, DueDate, etc.):
+
+| Approach | When to prefer | Trade-offs |
+|---|---|---|
+| **Single Calendar + USERELATIONSHIP** | 2–3 role-playing dates; few measures per alternate date | Smaller model; single source of truth for date attributes. But: every non-default date requires explicit `USERELATIONSHIP` in every measure; Calculation Groups only auto-apply to the active relationship |
+| **Duplicated date tables** (one per role) | Many measures on alternate dates; Calculation Groups must apply universally | Each relationship is active → time intelligence and Calculation Groups "just work". But: N copies of Calendar; attribute changes must be replicated |
+
+**Key inflection point** (per SQLBI — Alberto Ferrari / Marco Russo): If you use a **Time Intelligence Calculation Group**, it only evaluates against the **active** relationship. To make it work with inactive relationships, you must add explicit `USERELATIONSHIP` items per alternate date inside the calc group — which partially negates the maintenance benefit of calc groups.
+
+**Decision rule for this org:**
+1. **Default**: Single Calendar + USERELATIONSHIP (smaller model, standard SQLBI pattern)
+2. **Escalate to duplicated dates** when:
+   - The model has a Time Intelligence Calculation Group AND > 2 role-playing dates that need time intelligence
+   - > 10 measures reference the same alternate date (maintenance burden of USERELATIONSHIP becomes high)
+   - The Calendar table is small (< 20K rows) so duplication cost is negligible
+
+**Performance difference**: Minimal. Duplicated date tables add negligible RAM (date tables are typically < 20K rows). The real cost is maintenance and correctness risk (forgetting `USERELATIONSHIP` in a new measure vs. forgetting to replicate an attribute change across copies).
+
+**Agent behaviour**: When reviewing a model with role-playing dimensions, check whether the pattern is consistent. Flag as 🟡 MEDIUM if:
+- Some measures use `USERELATIONSHIP` and others don't for the same alternate date (inconsistency)
+- A Calculation Group exists but doesn't account for inactive relationships
+- Duplicated date tables exist but have drifted out of sync (different columns/attributes)
+
+> **Reference**: SQLBI — "The Definitive Guide to DAX", Chapter on Relationships; [sqlbi.com/articles/userelationship](https://sqlbi.com/articles/) for detailed guidance on role-playing patterns.
+
 ### Many-to-Many via Bridge Table (CL 1200/1400)
 
 ```dax
