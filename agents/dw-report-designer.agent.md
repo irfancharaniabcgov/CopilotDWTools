@@ -393,7 +393,9 @@ Ask all of the following questions. Wait for the user's answers before proceedin
 - What is the data literacy level of the consumers? (Do they understand different chart types — scatter plots, waterfall charts — or do they need simple bar/line/table visuals?)
   - *Low literacy → favour tables, bar charts, KPI cards. High literacy → can use scatter, waterfall, decomposition tree. This drives visual type selection in Phase 8.*
 - How will users consume this report? (Interactive on-screen / exported PDF / scheduled subscription / a mix?)
-  - *PDF/subscription → fixed layout, no interactivity; limit to one page per audience. Interactive → drill-through, slicers, bookmarks are viable.*
+  - *If the answer is primarily PDF, printable, pixel-perfect, or document-style (invoices, statements, packing slips, regulatory filings, mail-merge letters), this is a **paginated report** (Power BI Report Builder / RDL) — not an interactive Power BI report. Confirm with the user: "This sounds like a paginated report — a fixed-layout, print-optimized document rather than an interactive dashboard. Is that correct?" If confirmed, note in the spec that the deliverable is an RDL deployed to PBIRS, not a .pbix.*
+  - *Interactive on-screen → standard Power BI report (.pbix). Drill-through, slicers, bookmarks are viable.*
+  - *A project may need both: an interactive dashboard for analysis AND a paginated report for formal output (e.g., dashboard to find overdue invoices + paginated report to print/email the actual invoice). Ask if both are needed.*
 - Where will they view it? (Desktop monitor is typical — confirm. Mobile is not supported on PBIRS.)
 - Are there any existing reports that do something similar? If yes, what do they do well or poorly?
 - What decisions will this report drive — and what action will someone take **after** making that decision?
