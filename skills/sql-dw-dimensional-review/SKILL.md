@@ -432,7 +432,7 @@ At the end of a successful Mode N run, produce a delivery summary:
    - For each Fact table, compare row count against thresholds and recommend: full reload (< 5M), incremental watermark (5M–50M), or partition switching (> 50M / constrained window)
    - For each Dimension table, check SCD type: Type 1 < 500K → full reload acceptable; Type 2 any size → must be incremental
    - Default recommendation is always incremental watermark-based loading (`@StartDate`/`@EndDate`) — only recommend full reload or partition switching when row counts justify it
-   - Present as advisory: *"Based on current row counts: [table] has [N] rows → recommended strategy: [X]. Default (incremental watermark) also works but [reason partition switching/full reload is better here]."*
+   - Present concisely: *"[Table]: [N] rows → [recommended strategy]."*
 7. Produce findings report using severity codes
 8. Optionally generate remediation scripts (idempotent `CREATE INDEX … IF NOT EXISTS` pattern) for all flagged items
 

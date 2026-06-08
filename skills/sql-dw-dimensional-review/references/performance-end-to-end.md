@@ -25,7 +25,7 @@ DW Load (ELT)          →  SSAS Model Shape       →  DAX Measures        → 
 
 ### Batch Sizing Heuristics
 
-> **Agent behaviour**: When connected to the DW (live or via SSDT project), query actual row counts from `sys.partitions` before recommending a strategy. Present findings as: *"[Table] has [N] rows → recommended: [strategy]. Default (incremental watermark) also works."* Always default to incremental watermark-based loading unless row counts justify a different approach.
+> **Agent behaviour**: When connected to the DW (live or via SSDT project), query actual row counts from `sys.partitions` before recommending a strategy. Present concisely — e.g., *"Fact.SalesOrder: 42M rows → incremental with partition switching."* Default to incremental watermark unless row counts justify otherwise.
 
 | Scenario | Recommended Approach |
 |---|---|
