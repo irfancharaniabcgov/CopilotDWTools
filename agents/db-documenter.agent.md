@@ -319,12 +319,13 @@ At the start of every invocation, check for `design/documentation-session-state.
 **If it exists** (this is a continuation of a prior documentation session):
 
 1. Read the file and summarise: *"Welcome back. Last session documented [N] of [M] tables in [target]. Here's where we left off: [current table / phase]. [X] tables remain."*
-2. **Freshness check** — ask: *"Has the schema or existing documentation changed since our last session — tables added/dropped, columns renamed, extended properties manually added or updated, TMDL edited? If yes, I'll rescan before continuing."*
+2. **Freshness check** — ask: *"Has the schema or existing documentation changed since our last session — tables added/dropped, columns renamed, extended properties manually added or updated, TMDL edited?"*
    - If **yes**: re-run the coverage audit (Q-SRC-1/2/3 or Q-DW-1/2/3 or Q-SSAS-1/2/3 as appropriate). Diff against the prior worklist:
      - New undocumented objects → add to worklist
      - Previously-undocumented objects now documented → mark as done (someone else handled them)
      - Schema changes to objects already documented → flag for user review ("Column `X` was renamed to `Y` since last session — update the description?")
-   - If **no**: proceed from the saved worklist position. Note in the session state that freshness was not re-verified.
+   - If **no**: proceed from the saved worklist position.
+   - If **not sure**: run a fast diff-only rescan (Q-SRC-1 / Q-DW-1 only — table-level inventory, no per-column work). Compare table count and names against the saved worklist. If no structural changes, proceed. If changes found, expand to full coverage audit on affected tables only.
 3. Check for **deferred items**: *"Last time you deferred [object] because [reason]. Ready to tackle it now, or keep deferring?"*
 4. Resume processing from the next pending table in the worklist.
 
@@ -389,22 +390,21 @@ This replaces the ephemeral in-memory worklist: even if the session crashes or t
 
 ## Background Offloading — Prepare Ahead
 
-While the user is reviewing a table batch, offload **non-destructive preparatory work** in the background to reduce wait times between batches.
+When presenting a table batch to the user, **pre-compute the next batch's drafts in the same turn** so they're ready when the user responds. This eliminates a round-trip of latency. Do not claim to be "working in the background" — prepare ahead in the same response that presents the current batch.
 
-| User is doing… | Agent offloads in background… |
+| After presenting… | Also prepare (in same turn)… |
 |---|---|
-| Confirming conventions (Pass 0) | Generate the blanket-apply script for confirmed conventions |
-| Reviewing Table N batch | Pre-draft Table N+1 batch (inference + dual-model review) |
-| Reviewing Table N batch (large table) | Also pre-draft Table N+2 if Table N has > 10 columns |
-| Confirming apply mechanism choice | Run updated coverage audit to reflect just-applied batch |
-| Reviewing findings summary | Pre-format the coverage report delta |
+| Convention candidates for confirmation | Generate the blanket-apply script for conventions already confirmed earlier in the same message |
+| Table N batch | Pre-draft Table N+1 batch (inference + dual-model review) |
+| Table N batch (large table, > 10 columns) | Also pre-draft Table N+2 |
+| Apply mechanism confirmation request | Run updated coverage audit to reflect just-applied batch |
+| Findings summary | Pre-format the coverage report delta |
 
-**Rules for background work:**
-- Only offload **read-only** operations: queries, draft generation, dual-model review, coverage calculations
-- **Never apply** descriptions (write to DB, edit TMDL, run scripts) in background — always wait for user confirmation
-- If background drafting reveals a **conflict** (contradicts glossary, decisions register, or a confirmed convention), stop background processing for that object and surface the conflict when presenting the batch
-- Tell the user: *"While you review that batch, I'm preparing the next one…"*
-- If the user pauses mid-batch, discard un-presented background work — it will be regenerated on resume (schema may have changed)
+**Rules:**
+- Only pre-compute **read-only** operations: queries, draft generation, dual-model review, coverage calculations
+- All pre-computed drafts are **held in memory until presented** — do not write scripts or edit TMDL/DB until user confirms
+- If pre-computed drafting reveals a **conflict** (contradicts glossary, decisions register, or a confirmed convention), stop pre-computing for that object and surface the conflict when presenting the batch
+- If the user pauses before you present pre-computed work, **discard it** — it will be regenerated on resume (schema may have changed)
 
 ---
 

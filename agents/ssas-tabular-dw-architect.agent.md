@@ -32,6 +32,39 @@ All SSAS work uses `.bim` / TMDL format, Tabular Editor 2, and DAX. All PBIRS re
 
 ---
 
+## Cloud Portability — Advisory (does not block reviews or design decisions)
+
+The organisation has chosen technologies that preserve a viable cloud migration path (Microsoft Fabric / Azure). This is informational context for reviews — portability findings are advisory, not blockers.
+
+**Current infrastructure (already cloud-ready):**
+- Entra ID for authentication (no migration needed)
+- T-SQL stored procedures for all ELT transformation (portable to Azure SQL / Fabric Warehouse)
+- MERGE and set-based operations (GA in Fabric Warehouse)
+- SSIS as orchestration only (Execute SQL Task; ADF replaces 1:1)
+- SQL Agent Job = one job calling one SSIS orchestrator + SSAS processing
+- TMDL for SSAS model definitions (Fabric's native format)
+- Self-contained DW databases (no cross-database queries, no linked servers)
+- No CLR, xp_cmdshell, OPENROWSET, Database Mail, or Service Broker
+- SQL Server 2022 (upgrading to 2025 by end of 2026)
+
+**When reviewing existing infrastructure (Mode A):**
+Include a **Portability Assessment** section in findings if any of these anti-patterns are detected:
+- Cross-database queries (3/4-part names) in stored procedures
+- Linked Server references
+- CLR assembly usage
+- `xp_cmdshell` or `OPENROWSET` / `BULK INSERT` from file paths
+- SSIS Data Flow transforms (not just Execute SQL Task)
+- Complex Agent Jobs (> 2 steps with conditional logic)
+- Database Mail or Service Broker dependencies
+- Third-party SSIS components used for transformation (not just extraction)
+- Hard-coded server/database names (not parameterised)
+
+Portability findings use severity: 🟡 Low (< 1 day), 🟠 Medium (1–5 days), 🔴 High (> 5 days or blocks migration). They are **informational** — not blockers for the current review — and inform future planning.
+
+**Do not design for Multidimensional, MDX, or MOLAP** — there is no cloud migration path.
+
+---
+
 ## Automation-First Rule
 
 This stack is managed by **on-premises Azure DevOps Server** with self-hosted Windows build agents.

@@ -84,6 +84,7 @@ Activate when the user asks to:
 | `references/pbix-report-standards.md` | Debug/Data Freshness tab pattern, model hint descriptions, freshness infrastructure (DW view + SSAS hidden table), report page standards |
 | `references/source-system-analysis.md` | Mode P source discovery: T-SQL query library (Q1–Q10: table inventory, date/status column detection, PK/FK map, NULL rate checks, duplicate PK check, date range profiling, CDC/CT detection, cardinality profiling), classification heuristics (fact/dim/bridge/ignore with zero-row fallback and Priority 4/5 clarification), Source Entity Map output format, grain proposal pattern |
 | `references/data-classification.md` | SQL Server 2019+ native `ADD SENSITIVITY CLASSIFICATION`, org taxonomy (Protected A/B/C), audit queries, SSDT deployment |
+| `references/cloud-migration-portability.md` | On-prem → cloud portability matrix, patterns to prefer/avoid, PBIRS→PBI Service feature expansion, SSAS→Fabric transfer matrix, review checklist for portability assessment |
 
 ## Operating Modes
 
