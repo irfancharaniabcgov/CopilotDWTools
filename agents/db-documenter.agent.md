@@ -322,7 +322,7 @@ Then ask about data access and external context:
 
 When invoked from `dw-report-designer` Mode N: target is whatever was just built. Run D0 → D2 (DW) → D3 (SSAS) in sequence; D1 only if Mode P also discovered an undocumented source DB. Data access defaults to local (the build just generated the files).
 
-When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run. Data access defaults to live (Mode A already has an active connection).
+When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run. Data access defaults to local repo first (SSDT projects, TMDL files) — only connect live if the repo doesn't contain the schema or the user requests it.
 
 ### Documentation quality rationale
 

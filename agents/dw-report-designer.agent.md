@@ -326,10 +326,21 @@ Ask all of the following questions. Wait for the user's answers before proceedin
 
 #### Step 1 — Inventory the target DW
 
-Connect to the target DW server and run all three queries:
+**Prefer local repo first.** If the workspace contains a Visual Studio DB Project (SSDT) for the DW, read schema from `.sql` files under the project folder — this avoids a live connection and is faster. Look for table definitions in `Dimension/`, `Fact/`, `Staging/`, `Internal/`, `SSAS/` subfolders or by scanning `CREATE TABLE` / `CREATE PROCEDURE` statements.
 
+Only connect live (`mssql_connect`) if:
+- No SSDT project exists in the repo, OR
+- The user explicitly chose live connection in Step 3 of initialization, OR
+- The repo schema appears stale (user indicated changes occurred)
+
+**If using local files**, inventory by scanning:
+1. Existing DW tables — `.sql` files with `CREATE TABLE` under Dimension/Fact/Staging/Internal/SSAS schemas
+2. Existing SSAS Tabular model — `.bim` or TMDL files (`SSAS/{ModelName}/tables/*.tmdl`)
+3. Existing DW load stored procedures — `.sql` files with `CREATE PROCEDURE` matching `Load*` in Staging/Dimension/Fact/Internal schemas
+
+**If using live connection**, run all three queries:
 1. Existing DW tables — `SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA IN ('Dimension', 'Fact', 'Staging', 'Internal', 'SSAS') ORDER BY TABLE_SCHEMA, TABLE_NAME`
-2. Existing SSAS Tabular model tables — via DMV `SELECT * FROM $SYSTEM.TMSCHEMA_TABLES` if a live AS connection is available, or by locating `.bim` / TMDL files in the workspace
+2. Existing SSAS Tabular model tables — via DMV `SELECT * FROM $SYSTEM.TMSCHEMA_TABLES` if a live AS connection is available
 3. Existing DW load stored procedures — `SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'PROCEDURE' AND ROUTINE_SCHEMA IN ('Staging','Dimension','Fact','Internal') AND ROUTINE_NAME LIKE 'Load%' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`
 
 #### Step 2 — Greenfield check
