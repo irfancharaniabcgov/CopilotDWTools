@@ -1,7 +1,7 @@
 {
   "name": "sql-dw-ssas-toolkit",
   "description": "GitHub Copilot agents and skills for on-premises SQL Server Data Warehouse, SSAS Tabular, SSIS ELT, and Power BI Report Server development. Applies Kimball dimensional modeling and SQLBI/DAX Patterns. Covers schema review, TMDL scaffold, DAX generation, ELT patterns, ADO Classic pipelines, and discovery-driven DB documentation.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "irfancharaniabcgov"
   },
