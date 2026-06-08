@@ -814,6 +814,11 @@ After gathering performance requirements, apply these design constraints to the 
 - If user expects < 3 second load with complex measures, note potential need for aggregation table
 - Flag any semi-additive requirement (balances, inventory) as needing periodic snapshot fact consideration
 
+**Load strategy recommendation** (reference: `performance-end-to-end.md` Layer 1):
+- If connected to the DW (or row counts are known from Mode P profiling), map fact table sizes to the batch sizing table and include the recommendation in the spec handoff to the architect
+- Default is always incremental watermark-based loading — only escalate to partition switching when row counts or load-window constraints justify it
+- Note the recommendation in the spec under "Refresh & Performance → Architect Notes"
+
 ---
 
 ## Specification Document

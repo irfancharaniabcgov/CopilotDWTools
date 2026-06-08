@@ -428,8 +428,13 @@ At the end of a successful Mode N run, produce a delivery summary:
    - Flag the presence of a CIX as 🟡 MEDIUM (anti-pattern — staging should be heap with post-load NCI)
    - Check that natural key columns used in downstream MERGE have an NCI; flag missing as 🟡 MEDIUM
 5. Detect anti-patterns from `dw-physical-design.md` Section 6
-6. Produce findings report using severity codes
-7. Optionally generate remediation scripts (idempotent `CREATE INDEX … IF NOT EXISTS` pattern) for all flagged items
+6. **Recommend load/partition strategy** based on actual row counts (reference: `performance-end-to-end.md` Layer 1 batch sizing table):
+   - For each Fact table, compare row count against thresholds and recommend: full reload (< 5M), incremental watermark (5M–50M), or partition switching (> 50M / constrained window)
+   - For each Dimension table, check SCD type: Type 1 < 500K → full reload acceptable; Type 2 any size → must be incremental
+   - Default recommendation is always incremental watermark-based loading (`@StartDate`/`@EndDate`) — only recommend full reload or partition switching when row counts justify it
+   - Present as advisory: *"Based on current row counts: [table] has [N] rows → recommended strategy: [X]. Default (incremental watermark) also works but [reason partition switching/full reload is better here]."*
+7. Produce findings report using severity codes
+8. Optionally generate remediation scripts (idempotent `CREATE INDEX … IF NOT EXISTS` pattern) for all flagged items
 
 ---
 

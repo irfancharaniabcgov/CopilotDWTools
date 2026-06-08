@@ -25,6 +25,8 @@ DW Load (ELT)          →  SSAS Model Shape       →  DAX Measures        → 
 
 ### Batch Sizing Heuristics
 
+> **Agent behaviour**: When connected to the DW (live or via SSDT project), query actual row counts from `sys.partitions` before recommending a strategy. Present findings as: *"[Table] has [N] rows → recommended: [strategy]. Default (incremental watermark) also works."* Always default to incremental watermark-based loading unless row counts justify a different approach.
+
 | Scenario | Recommended Approach |
 |---|---|
 | Fact table < 5M rows total | Full truncate/reload — simplest, fast enough |
