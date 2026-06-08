@@ -302,7 +302,7 @@ Invoke-RestMethod "$base/DataSources" -Method POST -Body $ds `
 | Heavy measures without aggregations | DAX Studio Server Timings � high FE time | Add user-defined aggregations; optimise DAX |
 | "Show All" slicers force full scans | SSAS query log � full dimension scans | Use dropdown slicer; reduce member count |
 | Large model not fitting in SSAS memory | SSAS memory counters (Perfmon/Process Explorer) | Increase max memory; remove unused columns |
-| Subscription concurrency hitting SSAS | Multiple subscribers simultaneously | Stagger schedules; increase SSAS thread pool |
+| Subscription concurrency hitting SSAS | Multiple subscribers simultaneously | Stagger schedules; increase SSAS thread pool (DBA — raise as 🔵 LOW suggestion only) |
 
 **Connection note:** Each Kerberos-delegated user has its own SSAS connection (no cross-user pooling). Monitor: `SELECT * FROM $SYSTEM.DISCOVER_CONNECTIONS`.
 
