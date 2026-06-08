@@ -5,6 +5,8 @@
 **Deployed version:** Power BI Report Server May 2026 (v1.26.9637.31070, build 15.0.1121.109).  
 Update cadence: typically 1 major quarterly release behind latest.
 
+> **Maintenance note:** This feature comparison table is reviewed and updated at each plugin version bump, aligned with the PBIRS release cycle (~3x/year: Jan, May, Sep). If a feature is not in this table and the agent is uncertain, it must ask the user rather than assume availability. Agents also confirm the PBIRS version quarterly on long engagements.
+
 ---
 
 ## 1. PBIRS vs. Power BI Service � Feature Comparison
@@ -15,8 +17,11 @@ Update cadence: typically 1 major quarterly release behind latest.
 | Import mode (.pbix) | ✅ | ✅ | Limited by PBIRS server RAM |
 | DirectQuery to SQL Server | ✅ | ✅ | |
 | Composite models | ✅ | ❌ | Not supported in PBIRS |
+| DAX User-Defined Functions (UDFs) | ✅ (GA, Sep 2025+) | ❌ | Requires CL 1702; not available on PBIRS |
+| Visual Calculations | ✅ (GA) | ❌ | Cloud-only; no PBIRS support |
 | Report-level DAX measures | ✅ | ❌ | Must exist in SSAS model |
 | Calculated tables/columns (report) | ✅ | ❌ | Add to SSAS model |
+| Field Parameters | ✅ | ⚠️ Version-dependent | Check PBIRS version; use Calculation Groups if unavailable |
 | Power Query transforms in live connection | ❌ | ❌ | Neither supports this |
 | Q&A / AI Insights / Dataflows | ✅ | ❌ | Not supported on-prem |
 | RLS (model-defined) | ✅ | ✅ | Delegated via Kerberos |

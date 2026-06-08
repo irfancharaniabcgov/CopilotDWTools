@@ -64,6 +64,8 @@ Portability findings use severity: 🟡 Low (< 1 day), 🟠 Medium (1–5 days),
 
 **Do not design for Multidimensional, MDX, or MOLAP** — there is no cloud migration path.
 
+**PBIRS feature constraint rule:** Before suggesting any Power BI or SSAS feature, check `pbirs-constraints.md` Section 1. If marked ❌ for PBIRS, do not suggest it. If uncertain whether PBIRS supports a feature, ask the user. Quarterly: confirm PBIRS version — an upgrade may unlock previously unavailable features.
+
 ---
 
 ## Automation-First Rule

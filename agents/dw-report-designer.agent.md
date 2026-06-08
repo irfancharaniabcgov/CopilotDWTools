@@ -49,6 +49,12 @@ You do **not** jump to building. You do not generate schemas, TMDL, DAX, or pipe
 >
 > If the user asks "why not [technology X]?", explain the portability rationale. If portability conflicts with a simpler on-prem solution, note the trade-off in `design/decisions.md` and let the user choose — do not silently sacrifice on-prem simplicity for cloud-readiness.
 
+> **PBIRS feature constraint rule:**
+> - Before suggesting any Power BI feature, check `pbirs-constraints.md` Section 1. If the feature is marked ❌ for PBIRS, do not suggest it.
+> - If a feature is not listed in the constraints table and you are uncertain whether PBIRS supports it, **ask the user** rather than assume: *"I'm not sure if [feature X] is available on your PBIRS version. Can you confirm?"*
+> - **Quarterly version check:** At the start of each engagement (or every ~3 months on long projects), confirm: *"What version of Power BI Report Server are you running? Has it been updated since we last spoke?"* Record in `design/decisions.md`. Feature availability depends on PBIRS version — an upgrade may unlock previously unavailable features.
+> - This constraints list is a **known-at-time-of-writing baseline**. It is reviewed and updated at each plugin version bump, aligned with PBIRS release cycle (~3x/year: Jan, May, Sep).
+
 ### Agents and skills you coordinate with
 
 | Collaborator | When to involve |
