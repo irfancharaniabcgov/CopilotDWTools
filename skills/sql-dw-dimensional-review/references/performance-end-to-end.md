@@ -42,7 +42,7 @@ DW Load (ELT)          →  SSAS Model Shape       →  DAX Measures        → 
 2. **Index staging tables at end of load** — NCI on natural key after `INSERT`, not before (avoids index maintenance during bulk insert).
 3. **DELETE + INSERT over MERGE for facts** — avoids MERGE lock escalation on large tables; DELETE targets only changed rows via JOIN to staging.
 4. **Avoid SELECT * from source** — extract only required columns in the source query.
-5. **Set MAXDOP wisely** — for SSAS processing queries: `OPTION (MAXDOP 4)` avoids starving other workloads.
+5. **MAXDOP** — controlled at the server/Resource Governor level by the DBA. If processing queries compete with OLTP, flag for DBA review (not set per-query by these agents).
 
 ### Partition Switching Performance
 

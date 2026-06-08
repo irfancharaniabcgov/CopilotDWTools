@@ -308,21 +308,11 @@ INSERT INTO Staging.SalesOrder (...) SELECT ...;
 CREATE NONCLUSTERED INDEX IX_SalesOrder_SourceID ON Staging.SalesOrder (_SourceSalesOrderID);
 ```
 
-### MAXDOP Guidance for DW Workloads
+### MAXDOP — Review-Only Note
 
-| Operation | Recommended MAXDOP | Reason |
-|---|---|---|
-| Staging INSERT (bulk) | Server default | Let SQL Server parallelise the scan |
-| Dimension MERGE/UPDATE | 4 | Avoid excessive parallelism on write operations |
-| Fact DELETE/INSERT | 4–8 | Balance throughput vs. resource contention |
-| SSAS processing query (source SELECT) | 4 | Avoid starving concurrent DW operations |
-| Index rebuild (maintenance) | 4 | Standard maintenance window guidance |
-
-```sql
--- Example: SSAS processing query with MAXDOP hint
-SELECT [OrderDateKey], [CustomerKey], [ProductKey], [Quantity], [UnitPrice], [SalesAmount]
-FROM [SSAS].[SalesOrder] OPTION (MAXDOP 4);
-```
+> **Out of scope for generated code.** MAXDOP is typically controlled at the server or Resource Governor level by the DBA. These agents do **not** add `OPTION (MAXDOP N)` hints to generated queries or SPs.
+>
+> **During review (Mode A):** If SSAS processing queries or large ELT operations are observed competing with OLTP workloads, the agent may raise MAXDOP as a 🔵 LOW suggestion: *"Consider discussing query-level MAXDOP hints or Resource Governor workload groups with your DBA to prevent ELT/processing from starving other workloads."*
 
 ---
 
