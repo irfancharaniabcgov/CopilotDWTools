@@ -409,3 +409,62 @@ Breakdown:
 **Agent rule**: When reviewing a report, if Performance Analyzer data is available (screenshot or export), use it to prioritise findings by actual measured impact rather than theoretical concerns.
 
 > **PBIRS limitation**: Performance Analyzer is only available in Power BI Desktop during development. For deployed reports on PBIRS, capture query timings via SSAS Extended Events, DMVs (`$System.DISCOVER_SESSIONS`, `$System.DISCOVER_COMMANDS`), or DAX Studio Server Timings connected to the production SSAS instance.
+
+---
+
+## 8. Report Source Control
+
+### Current State — Binary .pbix in Git
+
+Reports (.pbix files) are stored as binary blobs in Git. This is the only viable approach for on-premises PBIRS deployments at this time.
+
+**What is source-controlled (via TMDL, not .pbix):**
+- Data model: tables, columns, measures, relationships, partitions, roles → TMDL folder in Git
+- DAX measures: individual `.tmdl` files per table → full diff/merge capability
+- Deployment pipeline: ADO Server pipeline deploys TMDL → SSAS
+
+**What lives inside the .pbix (opaque binary):**
+- Report page layout and visual definitions
+- Visual-level conditional formatting rules
+- Bookmarks, drill-through configuration
+- Slicer and filter settings
+- SSAS connection string
+- Theme / formatting choices
+
+### Limitations of Binary .pbix
+
+| Limitation | Impact | Mitigation |
+|---|---|---|
+| Cannot diff between versions | No visibility into what changed between commits | Use descriptive commit messages; maintain a changelog in `design/report-changelog.md` |
+| Cannot merge | Two people cannot work on the same .pbix simultaneously | Single-author workflow; coordinate via branching (one .pbix per branch) |
+| Large file size over time | Git history grows; clone becomes slow | Use Git LFS for .pbix files (optional; evaluate if repo size > 500 MB) |
+| No code review of visual changes | PRs cannot show what changed in the report | Attach before/after screenshots to the PR; describe changes in PR body |
+
+### Best Practices for Binary .pbix Workflow
+
+1. **One .pbix per logical report** — do not combine unrelated subject areas into a single file
+2. **Commit messages must describe visual changes** — e.g., "Add drill-through page for regional detail; consolidate KPI cards into matrix on Exec Summary"
+3. **Maintain `design/report-changelog.md`** per project — record page additions, visual changes, filter modifications, connection string changes with dates
+4. **Single author at a time** — coordinate ownership; if two developers need to work on the same report, use sequential handoff (not parallel)
+5. **Store alongside TMDL** — keep `.pbix` in the same repo as the SSAS model so the full stack is versioned together
+6. **Tag deployments** — when publishing to PBIRS, tag the commit: `git tag -a pbirs-deploy-YYYY-MM-DD -m "Deployed to PBIRS"`
+
+### What is NOT Available On-Premises
+
+The following features require Power BI Service (cloud) and are **not applicable** to this stack:
+
+| Feature | Requires | Status |
+|---|---|---|
+| PBIP format (folder-based report) | PBI Service for deployment | ❌ Not available for PBIRS |
+| Git integration (workspace) | PBI Service Premium/Fabric | ❌ Cloud-only |
+| Power BI Enhanced Report Format (.pbir) | Fabric | ❌ Cloud-only |
+| Deployment pipelines (Dev/Test/Prod) | PBI Service Premium | ❌ Use ADO Server pipelines instead |
+
+> **Research spike**: PBIP format may be usable as a *development-only* format (save as PBIP → diff/review → export back to .pbix for PBIRS deployment). Viability depends on whether the PBIRS-optimized PBI Desktop version supports PBIP save/open. See `design/spikes/pbip-on-prem-viability.md` if investigation is pursued.
+
+### Agent Behaviour
+
+- **Do not recommend** PBIP, Git integration, or cloud-only features for source control
+- **Do recommend** descriptive commit messages, report changelog, and screenshot-based PR review
+- When generating a new report spec, include a `## Source Control` section noting the .pbix file path and branch ownership
+- Flag if multiple .pbix files appear to cover the same subject area (consolidation candidate)
