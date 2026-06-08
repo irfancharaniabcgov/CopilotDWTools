@@ -446,14 +446,16 @@ At the end of each batch presentation, if deferred items have accumulated:
 
 #### Resume prompt
 
-On session resume (after freshness check, step 4), present deferred items grouped by who can answer:
+On session resume (after freshness check, step 4), present deferred items grouped by who can answer using the standard role taxonomy:
+
+**Standard roles**: Client, Business Analyst, Technical/Solutions Architect, Data Architect, DBA, Operations Analyst (Infrastructure), Vendor (external)
 
 > *"You have [N] deferred items ([X] blocking, [Y] advisory):*
 >
 > *By role:*
+> - *Client: [list]*
+> - *DBA: [list]*
 > - *Vendor: [list]*
-> - *DBA / Architect: [list]*
-> - *Business owner: [list]*
 >
 > *Should we:*
 > 1. *Review the deferred list first (recommended if you have answers)*

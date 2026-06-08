@@ -325,12 +325,24 @@ If the user has brought answers, resolve them and update the spec/decisions regi
 
 #### Multi-role awareness
 
-If the user mentions different people/roles are needed for different answers (e.g., "the architect would know that" or "I'd need to ask the business"), track `Who can answer` in each deferral. On resume, group deferred items by role:
+If the user mentions different people/roles are needed for different answers (e.g., "the architect would know that" or "I'd need to ask the business"), track `Who can answer` in each deferral using the standard role taxonomy:
+
+**Primary roles** (most common):
+- **Client** — business owner, end user, subject matter expert
+- **Business Analyst** — requirements, business rules, definitions
+- **Technical / Solutions Architect** — design decisions, technology choices, integration patterns
+
+**Secondary roles** (infrastructure/data):
+- **Data Architect** — model design, data lineage, governance
+- **DBA** — server configuration, security, performance tuning, MAXDOP, Resource Governor
+- **Operations Analyst (Infrastructure)** — networking, server access, scheduling, AD/Entra
+
+On resume, group deferred items by role:
 
 > *"Deferred items by role needed:*
-> - *Architect: [2 items — grain for FactX, partition strategy]*
+> - *Technical Architect: [2 items — partition strategy, SSAS processing window]*
 > - *Business Analyst: [1 item — definition of 'active client']*
-> - *Unknown: [1 item — refresh cadence]*
+> - *Client: [1 item — refresh cadence requirement]*
 >
 > *Are any of these people available this session?"*
 
