@@ -344,6 +344,22 @@ Performance Analyzer is only available in Power BI Desktop. For deployed reports
 
 **Agent rule**: When reviewing performance of a deployed report (not a .pbix in Desktop), recommend SSAS Extended Events + `ExecutionLog3` as the primary diagnostic path. Do not tell users to use Performance Analyzer for production troubleshooting.
 
+### Step 6: RLS Performance Impact
+
+Row-Level Security adds per-query filter overhead. Dynamic RLS (TREATAS against a permissions table) costs more than fixed roles.
+
+**Benchmark method** (DAX Studio):
+1. Run a representative query **without** a role (baseline).
+2. Re-run the same query **with** a role (Connection → Roles → select role; set EffectiveUserName).
+3. Compare total duration. Overhead < 15% of baseline is acceptable; > 30% warrants investigation.
+
+**Common causes of RLS slowness:**
+- Permissions table has high cardinality (> 50K rows) — pre-aggregate or filter upstream.
+- `PATHCONTAINS` hierarchy-based RLS on deep trees — flatten to a bridge table.
+- Bidirectional cross-filter on the secured relationship — avoid; use TREATAS instead.
+
+**Agent rule**: During Mode B (Tabular Review), if dynamic RLS roles exist, flag for performance validation and suggest the benchmark method above.
+
 ---
 
 ## Performance SLAs (Organisation Defaults)
