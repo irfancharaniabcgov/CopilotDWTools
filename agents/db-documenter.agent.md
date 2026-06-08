@@ -318,16 +318,17 @@ At the start of every invocation, check for `design/documentation-session-state.
 
 **If it exists** (this is a continuation of a prior documentation session):
 
-1. Read the file and summarise: *"Welcome back. Last session documented [N] of [M] tables in [target]. Here's where we left off: [current table / phase]. [X] tables remain."*
-2. **Freshness check** — ask: *"Has the schema or existing documentation changed since our last session — tables added/dropped, columns renamed, extended properties manually added or updated, TMDL edited?"*
+1. Read the file. Check the `Schema version` field — if it is missing or differs from `1`, treat as best-effort context but do not rely on specific field positions. Summarise what you can parse and confirm with the user.
+2. Summarise: *"Welcome back. Last session documented [N] of [M] tables in [target]. Here's where we left off: [current table / phase]. [X] tables remain."*
+3. **Freshness check** — ask: *"Has the schema or existing documentation changed since our last session — tables added/dropped, columns renamed, extended properties manually added or updated, TMDL edited?"*
    - If **yes**: re-run the coverage audit (Q-SRC-1/2/3 or Q-DW-1/2/3 or Q-SSAS-1/2/3 as appropriate). Diff against the prior worklist:
      - New undocumented objects → add to worklist
      - Previously-undocumented objects now documented → mark as done (someone else handled them)
      - Schema changes to objects already documented → flag for user review ("Column `X` was renamed to `Y` since last session — update the description?")
    - If **no**: proceed from the saved worklist position.
    - If **not sure**: run a fast diff-only rescan (Q-SRC-1 / Q-DW-1 only — table-level inventory, no per-column work). Compare table count and names against the saved worklist. If no structural changes, proceed. If changes found, expand to full coverage audit on affected tables only.
-3. Check for **deferred items**: *"Last time you deferred [object] because [reason]. Ready to tackle it now, or keep deferring?"*
-4. Resume processing from the next pending table in the worklist.
+4. Check for **deferred items**: *"Last time you deferred [object] because [reason]. Ready to tackle it now, or keep deferring?"*
+5. Resume processing from the next `InProgress` or `Pending` table in the worklist. Skip `Done`, `Skipped`, and `OutOfScope` items.
 
 **If it does not exist**: proceed normally (new session).
 
@@ -341,6 +342,7 @@ When pausing:
 
 ```markdown
 # Documentation Session State
+**Schema version**: 1
 **Target**: [server].[database] / [SSAS model name]
 **Mode**: D1 / D2 / D3
 **Last active**: [today's date]
@@ -352,13 +354,24 @@ When pausing:
 - **Tables documented this session**: [list]
 - **Conventions confirmed**: [count] covering [N] columns
 
-## Worklist — Remaining Tables
-| # | Schema.Table | Columns Remaining | Priority | Notes |
+## Worklist
+| # | Schema.Table | Status | Columns Remaining | Notes |
 |---|---|---|---|---|
-| 1 | dbo.Invoice | 5 of 12 | High | In progress — 7 confirmed, 5 pending |
-| 2 | dbo.Product | 8 | Medium | Not started |
-| 3 | dbo.Supplier | 4 | Low | Not started |
+| 1 | dbo.Customer | ✅ Done | 0 | Documented this session |
+| 2 | dbo.Invoice | 🔄 InProgress | 5 of 12 | 7 confirmed, 5 pending |
+| 3 | dbo.Product | ⏳ Pending | 8 | Not started |
+| 4 | dbo.AuditLog | ⏭️ Skipped | — | Skip rule: system/audit table (§ 6) |
+| 5 | dbo.LegacyExport | ❓ Deferred | 3 | User needs to check with vendor |
+| 6 | dbo.TempStaging | 🚫 OutOfScope | — | User excluded during triage |
 [...]
+
+**Status values:**
+- `Done` — fully documented this or a prior session
+- `InProgress` — partially documented; resume here
+- `Pending` — not yet started; in scope
+- `Skipped` — excluded by skip rules (§ 6 of reference); record which rule
+- `Deferred` — user wants to revisit later; record reason
+- `OutOfScope` — user explicitly excluded during triage; do not process on resume
 
 ## Deferred Items
 | Object | Reason | Deferred On |
@@ -382,7 +395,12 @@ When pausing:
 
 ### Documentation Worklist Persistence
 
-The coverage audit worklist must be persisted — it is the backbone of multi-session documentation passes. Write it to `design/documentation-session-state.md` after the initial audit completes. Update it as tables are documented (status changes from Pending → Done).
+The coverage audit worklist must be persisted — it is the backbone of multi-session documentation passes. Write it to `design/documentation-session-state.md` after the initial audit completes. Update it as tables are documented (status changes: Pending → InProgress → Done, or Pending → Skipped/Deferred/OutOfScope).
+
+On resume, the agent reads the worklist and:
+- Skips `Done`, `Skipped`, and `OutOfScope` items
+- Offers `Deferred` items back to the user ("Ready to tackle this now?")
+- Resumes from the first `InProgress` or `Pending` item
 
 This replaces the ephemeral in-memory worklist: even if the session crashes or the user closes the window without saying "pause", the worklist up to the last completed table is recoverable from the file.
 

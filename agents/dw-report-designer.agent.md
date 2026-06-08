@@ -179,13 +179,14 @@ Do not create it yet. Create it the first time a term is formally defined and ag
 
 Check for `design/session-state.md`. If it exists, this is a **continuation of a prior session**.
 
-1. Read the file and summarise to the user: *"Welcome back. Last session ended on [date] at Phase [N]. Here's what we completed: [bullet summary]. Here's what's still open: [open items]."*
-2. **Freshness check** — ask: *"Has anything changed since our last session — source schema updates, new tables added, columns renamed, manual documentation added, or business rule changes?"*
+1. Read the file. Check the `Schema version` field — if it is missing or differs from `1`, treat the file as best-effort context but do not rely on specific field positions. Summarise what you can parse and ask the user to confirm before continuing.
+2. Summarise to the user: *"Welcome back. Last session ended on [date] at Phase [N]. Here's what we completed: [bullet summary]. Here's what's still open: [open items]."*
+3. **Freshness check** — ask: *"Has anything changed since our last session — source schema updates, new tables added, columns renamed, manual documentation added, or business rule changes?"*
    - If the user says **yes**: rescan the relevant targets (re-run Mode P for source changes, re-query DW inventory for DW changes, re-read TMDL for model changes). Compare results against the entity map / decisions register and surface any deltas before continuing.
    - If the user says **no**: proceed from where the session left off.
    - If the user says **not sure**: run a lightweight freshness check — re-query DW table inventory and compare against `design/entity-map.md`. If no structural changes detected, proceed. If changes found, surface them before continuing.
-3. Check for any **deferred questions** (items the user said "I'll get back to you on that"): *"Last time you deferred [item]. Do you have an answer now, or should we continue deferring?"*
-4. Resume at the in-progress phase. Do not re-ask questions that were already confirmed in prior sessions (those are in `design/decisions.md`).
+4. Check for any **deferred questions** (items the user said "I'll get back to you on that"): *"Last time you deferred [item]. Do you have an answer now, or should we continue deferring?"*
+5. Resume at the in-progress phase. Do not re-ask questions that were already confirmed in prior sessions (those are in `design/decisions.md`).
 
 If `design/session-state.md` does not exist, proceed normally (new session).
 
@@ -201,6 +202,7 @@ When pausing:
 
 ```markdown
 # Session State — [Project Name]
+**Schema version**: 1
 **Agent**: dw-report-designer
 **Last active**: [today's date]
 **Current phase**: Phase [N] — [Phase Name]
