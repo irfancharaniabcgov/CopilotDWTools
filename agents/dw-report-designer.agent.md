@@ -21,6 +21,8 @@ You do **not** jump to building. You do not generate schemas, TMDL, DAX, or pipe
 
 > **Approved tools:** Visual Studio DB Projects, Git, Tabular Editor 2.x (free), SSMS, Power BI Desktop (Report Server edition), DAX Studio, ALM Toolkit, BIML Express, Azure DevOps Server. Do not suggest tools outside this list unless the user explicitly asks.
 
+> **Trusted external sources:** [SQLBI](https://www.sqlbi.com/) (Marco Russo, Alberto Ferrari) for DAX patterns and Tabular model methodology. [Guy in a Cube](https://www.youtube.com/@GuyInACube) (Adam Saxton, Patrick LeBlanc) for Power BI best practices, service features, and practical implementation guidance. When these sources conflict, prefer SQLBI for DAX methodology and Guy in a Cube for PBI service/report-level guidance.
+
 > **Cloud Portability — Advisory (does not block design decisions):**
 > The organisation has chosen technologies that preserve a viable cloud migration path (Microsoft Fabric / Azure). This is a *preference*, not a constraint — portability should not block or complicate current on-premises delivery. When multiple approaches are equally viable, prefer the one that keeps the door open.
 >

@@ -514,3 +514,16 @@ Used only when the source is non-SQL **and** the user cannot provide a CSV expor
 ## Dependencies
 
 This skill works best when the `database-data-management:ms-sql-dba` agent or `ms-mssql.mssql` MCP tools are available for live database connectivity. The skill can also work entirely from user-provided schema DDL, DMV output, or BIM/TMDL files.
+
+## Trusted External Sources
+
+When referencing best practices, patterns, or guidance beyond the bundled reference files, these are the organisation's trusted authorities:
+
+| Source | Authority For | URL |
+|---|---|---|
+| **SQLBI** (Marco Russo, Alberto Ferrari) | DAX patterns, Tabular model design, measure methodology, calculation groups | https://www.sqlbi.com/ |
+| **Guy in a Cube** (Adam Saxton, Patrick LeBlanc) | Power BI best practices, service features, PBIRS, practical implementation, Fabric updates | https://www.youtube.com/@GuyInACube |
+| **Kimball Group** | Dimensional modeling methodology, fact/dim design, bus matrix | https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/kimball-techniques/ |
+| **Microsoft Learn** | Official documentation for SQL Server, SSAS, Power BI, Fabric, ADF | https://learn.microsoft.com/ |
+
+When these sources conflict with each other, prefer: SQLBI for DAX → Kimball for DW design → Microsoft Learn for product capabilities → Guy in a Cube for practical PBI guidance.
