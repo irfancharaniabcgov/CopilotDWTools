@@ -177,6 +177,33 @@ Load it and treat all terms as canonical for this session. When the user uses a 
 **If `design/glossary.md` does not exist:**
 Do not create it yet. Create it the first time a term is formally defined and agreed upon during the interview.
 
+**Step 3 — External documentation and data access:**
+
+Ask these two questions before starting Phase 1 (skip if this is a resumed session — these were already answered):
+
+> *"Two quick setup questions before we begin:*
+>
+> *1. Do you have any existing documentation that would help me understand the business domain — data dictionaries, process maps, business requirements documents, wiki pages, ERDs, or similar? If so, you can paste key sections, attach files, or point me at URLs. This saves us re-discovering things you've already documented elsewhere.*
+>
+> *2. For source system discovery: I can either (a) connect live to your SQL Server databases and profile schemas directly, or (b) work from schema files already in this repository (SSDT projects, .sql scripts, TMDL files). Live connection gives the most complete picture (row counts, data samples, NULL rates) but uses more tokens in this session. Working from local files is faster and cheaper but may miss runtime details. Which do you prefer — or a mix of both?"*
+
+If the user provides external documentation:
+- Read it immediately and extract relevant facts (entity names, business rules, glossary terms, relationships)
+- Cross-reference against what's in the repo — surface any contradictions
+- Use the external docs as a starting point for Phase 1–4 questions (don't re-ask what's already documented)
+- Note the source in `design/decisions.md` for traceability
+
+If the user chooses **local-only** data access:
+- Use SSDT project files, `.sql` scripts, and TMDL files from the workspace for discovery
+- Skip Mode P live profiling queries; instead, build the entity map from DDL files
+- Note in the entity map that row counts and NULL rates are unavailable (no live connection)
+- If a Phase 3 grain question cannot be resolved without live data (e.g., "how many rows per order?"), ask the user for the answer directly rather than connecting
+
+If the user chooses **live connection**:
+- Proceed with `mssql_connect` and Mode P as normal
+- Be efficient with queries — batch related questions into single query sessions rather than connecting repeatedly
+- Prefer the DW inventory query + Mode P in a single connection session
+
 ### Session Resume Protocol
 
 Check for `design/session-state.md`. If it exists, this is a **continuation of a prior session**.

@@ -296,9 +296,33 @@ When invoked standalone (not from another agent), ask:
 > *(c) An SSAS Tabular model — provide server + model name, or path to TMDL folder*
 > *(d) All three (typically after a build) — confirm each target one at a time"*
 
-When invoked from `dw-report-designer` Mode N: target is whatever was just built. Run D0 → D2 (DW) → D3 (SSAS) in sequence; D1 only if Mode P also discovered an undocumented source DB.
+Then ask about data access and external context:
 
-When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run.
+> *"Two setup questions:*
+>
+> *1. Do you have any existing documentation that would help me understand the business domain for this database — data dictionaries, ERDs, wiki pages, or similar? Paste key sections or attach files if so. This helps me draft more accurate descriptions without asking as many questions.*
+>
+> *2. For the coverage audit and schema inspection: I can either (a) connect live to the database and query `sys.objects` / `sys.extended_properties` / DMVs directly, or (b) work from schema files already in this repository (SSDT project, .sql scripts, TMDL files). Live connection gives the most accurate audit (catches recent DDL changes, lets me sample data for PII detection) but uses more tokens. Local files are faster and cheaper but may be out of date. Which do you prefer?"*
+
+**If the user provides external documentation:**
+- Read it and extract entity descriptions, business rules, and domain terminology
+- Use these as seeds for draft descriptions (higher-confidence drafts = fewer questions)
+- Cross-reference against the schema — if docs describe tables/columns that don't exist (or vice versa), flag the mismatch
+
+**If the user chooses local-only:**
+- Parse SSDT `.sql` files, TMDL files, or any schema scripts in the repo
+- Build the coverage audit from file content (may miss recently-added objects not yet committed)
+- Skip data sampling for PII detection — rely on column name heuristics only
+- Note in the coverage report: "Audit based on repo files as of [commit SHA]; live schema not verified"
+
+**If the user chooses live connection:**
+- Proceed with `mssql_connect` as normal
+- Batch queries efficiently — run all audit queries (Q-SRC-1/2/3 or Q-DW-1/2/3) in a single connection session
+- Disconnect when the audit is complete; reconnect only when applying scripts (if user chose direct apply)
+
+When invoked from `dw-report-designer` Mode N: target is whatever was just built. Run D0 → D2 (DW) → D3 (SSAS) in sequence; D1 only if Mode P also discovered an undocumented source DB. Data access defaults to local (the build just generated the files).
+
+When invoked from `ssas-tabular-dw-architect` Mode A: target is whatever the audit flagged. Mode A's findings determine which of D2 / D3 to run. Data access defaults to live (Mode A already has an active connection).
 
 ### Documentation quality rationale
 
