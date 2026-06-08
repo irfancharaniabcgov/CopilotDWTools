@@ -254,7 +254,76 @@ LEFT JOIN Dimension.Region r ON s.RegionCode = r._SourceRegionCode;
 
 ---
 
-## Layer 1: Source Database — Extract Stored Procedures
+## Load Performance Heuristics
+
+### Batch Sizing
+
+| Scenario | Row Count | Recommended Strategy |
+|---|---|---|
+| Small dimension (reference data) | < 50K rows | Full truncate/reload — simplest |
+| Medium dimension (SCD Type 2) | 50K–500K rows | Incremental by change date; MERGE for SCD2 |
+| Large dimension | > 500K rows | Incremental + hash-based change detection |
+| Small fact table | < 5M total rows | Full reload or simple DELETE/INSERT of changed |
+| Medium fact table | 5M–50M total rows | Incremental (watermark) DELETE/INSERT |
+| Large fact table | > 50M total rows | Partition switching on current period |
+
+### Restartability
+
+Every load SP must be **idempotent** — re-running it produces the same result as running it once:
+
+- **Staging**: `TRUNCATE TABLE` before insert ensures clean state on retry
+- **Dimensions (SCD Type 2)**: expire/insert pattern is naturally idempotent (re-running re-expires and re-inserts same rows)
+- **Facts (DELETE/INSERT)**: DELETE by source key before INSERT ensures no duplicates on retry
+- **Lineage**: `Internal.Lineage` Status = 'P' (pending) → 'S' (success) or 'F' (failed); failed runs leave the high-water mark unchanged so next run retries the same window
+
+### Processing Window Budget
+
+The nightly load window must complete with margin to spare:
+
+| Activity | Target % of window |
+|---|---|
+| Source extracts (SSIS Execute SQL) | 10–20% |
+| Staging → Dimension transforms | 10–15% |
+| Staging → Fact transforms | 30–40% |
+| SSAS ProcessData (partitions) | 20–30% |
+| SSAS ProcessRecalculate | 5–10% |
+| Buffer/margin | ≥ 10% |
+
+**Rule**: If total exceeds 70% of available window, optimise the largest consumer first (usually fact loads or SSAS processing).
+
+### Index Timing for Staging Tables
+
+```sql
+-- Pattern: add NCI AFTER bulk insert, drop before next load
+-- This avoids index maintenance overhead during INSERT
+
+-- At start of staging load:
+IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SalesOrder_SourceID' AND object_id = OBJECT_ID('Staging.SalesOrder'))
+    DROP INDEX IX_SalesOrder_SourceID ON Staging.SalesOrder;
+
+TRUNCATE TABLE Staging.SalesOrder;
+INSERT INTO Staging.SalesOrder (...) SELECT ...;
+
+-- After staging load completes (before dimension/fact loads use the staging table):
+CREATE NONCLUSTERED INDEX IX_SalesOrder_SourceID ON Staging.SalesOrder (_SourceSalesOrderID);
+```
+
+### MAXDOP Guidance for DW Workloads
+
+| Operation | Recommended MAXDOP | Reason |
+|---|---|---|
+| Staging INSERT (bulk) | Server default | Let SQL Server parallelise the scan |
+| Dimension MERGE/UPDATE | 4 | Avoid excessive parallelism on write operations |
+| Fact DELETE/INSERT | 4–8 | Balance throughput vs. resource contention |
+| SSAS processing query (source SELECT) | 4 | Avoid starving concurrent DW operations |
+| Index rebuild (maintenance) | 4 | Standard maintenance window guidance |
+
+```sql
+-- Example: fact load query with MAXDOP hint for SSAS processing
+SELECT * FROM [SSAS].[SalesOrder] OPTION (MAXDOP 4);
+```
+
+---
 
 ### Design Principles
 - Source SPs are read-only.

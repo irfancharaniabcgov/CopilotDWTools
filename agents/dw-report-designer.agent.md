@@ -718,6 +718,32 @@ Ask all of the following questions:
 - *Intraday (e.g., hourly) → requires a separate intraday ADO pipeline with its own schedule; SSAS partition strategy must support incremental processing without locking; source SPs must use a narrow `@StartDate`/`@EndDate` window; discuss with the user whether the extra infrastructure cost is justified before committing*
 - *Real-time → not supported by this stack (SSAS Tabular live connection does not support real-time push); redirect the user: "Real-time data is not supported by the current PBIRS + SSAS Tabular stack. The finest granularity available is hourly incremental refresh. Is hourly acceptable?"*
 
+#### Performance Design Actions (apply based on answers above)
+
+After gathering performance requirements, apply these design constraints to the specification:
+
+**Visual budget** (reference: `performance-end-to-end.md` Layer 4):
+- Assign a visual budget per page type based on table in Section 7.1 of `pbix-report-standards.md`
+- If the design from Phases 3–7 exceeds the budget for any page, recommend consolidation (Matrix over Cards, drill-through over inline detail)
+
+**Query reduction** (reference: `pbix-report-standards.md` Section 7.3):
+- Document which visual interactions will be **disabled** (set to None) — default is all non-analytically-related pairs
+- Note slicer count per page; if > 3 slicers, recommend page-level filters for the less-frequently-changed ones
+
+**Visual type selection** (reference: `pbix-report-standards.md` Section 7.4):
+- Executive/KPI pages: prefer rank 1–4 visuals (Card consolidated via Matrix, bar/column, line)
+- Maps and decomposition trees: detail/drill-through pages only
+- Time-series: default to month/quarter grain; daily only via drill-through filter
+
+**Matrix consolidation** (reference: `pbix-report-standards.md` Section 7.2):
+- For any group of 3+ related KPI metrics on the same page, recommend Matrix consolidation pattern
+- Document in spec: "KPIs [X, Y, Z] consolidated into single Matrix visual styled as cards"
+
+**Model implications** (reference: `performance-end-to-end.md` Layer 2–3):
+- If history range is > 3 years with a growing fact table, note partition strategy requirement for architect
+- If user expects < 3 second load with complex measures, note potential need for aggregation table
+- Flag any semi-additive requirement (balances, inventory) as needing periodic snapshot fact consideration
+
 ---
 
 ## Specification Document

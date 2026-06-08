@@ -345,6 +345,88 @@ COUNTROWS(
 - Hidden helper measures may be placed in any relevant folder, but must still have a folder for maintainability.
 - Never leave measures in the root. Always assign a `DisplayFolder`.
 
+---
+
+## Performance rules
+
+### Iterator avoidance
+
+Iterators (`SUMX`, `AVERAGEX`, `MAXX`, `MINX`, `COUNTX`, `RANKX`) evaluate a row-by-row expression. On large tables they become the dominant query cost.
+
+| Rule | Threshold | Action |
+|---|---|---|
+| Avoid iterators on large fact tables | > 5M rows | Pre-compute in DW load SP or SSAS calculated column |
+| Avoid nested CALCULATE inside iterators | Any table size | Extract to VAR outside the iterator |
+| Prefer SUM/COUNT over SUMX/COUNTX | When expression is a single column | `SUM(Table[Column])` is always faster than `SUMX(Table, Table[Column])` |
+
+**Justified iterator use** (document reason in `Description`):
+- Row-level multiplication: `SUMX(Sales, Sales[Qty] * Sales[UnitPrice])` — cannot be pre-aggregated
+- Events in Progress: `COUNTROWS(FILTER(ALL(...)))` — cumulative pattern
+- Weighted averages: `DIVIDE(SUMX(...), SUM(...))` — requires row context
+
+### Context transition minimisation
+
+A context transition occurs when CALCULATE (or a measure reference) appears inside a row context. Each transition recalculates for every row.
+
+```dax
+-- ❌ BAD: Context transition inside iterator (N evaluations of [Tax Rate Measure])
+Sales with Tax =
+SUMX( Sales, Sales[Amount] * (1 + [Tax Rate Measure]) )
+
+-- ✅ GOOD: Resolve outside iterator
+Sales with Tax =
+VAR _TaxRate = [Tax Rate Measure]
+RETURN SUMX( Sales, Sales[Amount] * (1 + _TaxRate) )
+```
+
+**Rule**: Never reference a measure inside `SUMX`/`FILTER`/`ADDCOLUMNS` unless the measure must vary per row. If it must, document why.
+
+### VAR caching
+
+Any sub-expression used more than once must be assigned to a VAR:
+
+```dax
+-- ❌ BAD: Same sub-expression evaluated twice
+YoY % =
+DIVIDE(
+    [Total Sales] - CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Calendar'[Date Key])),
+    CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Calendar'[Date Key]))
+)
+
+-- ✅ GOOD: Evaluated once, referenced twice
+YoY % =
+VAR _Current = [Total Sales]
+VAR _PY = CALCULATE([Total Sales], SAMEPERIODLASTYEAR('Calendar'[Date Key]))
+RETURN DIVIDE(_Current - _PY, ABS(_PY))
+```
+
+### DISTINCTCOUNT on high cardinality
+
+`DISTINCTCOUNT` on columns with > 1M distinct values is expensive. Alternatives:
+- Pre-aggregate distinct counts in DW load (daily/monthly grain)
+- Use approximate: `APPROXIMATE DISTINCTCOUNT` (Power BI Service only — not available in SSAS on-prem)
+- Reduce granularity: count at month level instead of day
+
+### Calculation group efficiency
+
+Calculation groups are more performant than duplicated measures because:
+- Single `SELECTEDMEASURE()` evaluation per calc item vs. N separate measure evaluations
+- Engine optimises the execution plan across items
+- Fewer Storage Engine queries when users switch time periods via slicer
+
+**Rule**: If you have > 5 base measures and > 3 time-intelligence variants (YTD, PY, YoY, QTD, etc.), always use a Calculation Group instead of measure proliferation.
+
+### Agent review: performance flags
+
+| Pattern found | Severity | Recommendation |
+|---|---|---|
+| `SUMX` / `COUNTX` on table > 5M rows | 🟠 HIGH | Consider upstream pre-computation |
+| Measure reference inside `SUMX` / `FILTER` / `ADDCOLUMNS` | 🟠 HIGH | Extract to VAR if constant across rows |
+| Same sub-expression repeated without VAR | 🟡 MEDIUM | Assign to VAR |
+| `DISTINCTCOUNT` on column > 1M distinct | 🟡 MEDIUM | Pre-aggregate or reduce grain |
+| > 15 time-intelligence measure copies without Calculation Group | 🟡 MEDIUM | Convert to Calculation Group |
+| `FILTER(ALL(LargeTable), single condition)` without documented exception | 🟠 HIGH | Use `CALCULATE` with filter argument |
+
 ## PBIRS live-connection constraints
 
 ### Report authoring constraints

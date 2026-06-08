@@ -281,3 +281,123 @@ Classification: <InformationType> / <SensitivityLabel>  (if applicable)
 1. **Reviewing SSAS model**: flag all visible tables and non-hidden measures missing descriptions as 🟡 Medium findings.
 2. **Reviewing a Power BI report**: flag missing Debug tab as 🟠 High finding — "Report has no Debug/Data Freshness tab — users cannot self-diagnose stale data."
 3. **Generating a new measure or table**: always include a description following the template above.
+
+---
+
+## 7. Visual Performance Standards
+
+> **Core principle**: Every visual on a page fires at least one DAX query to SSAS on page load. Fewer visuals = fewer queries = faster perceived load.
+
+### 7.1 Visual Budget Per Page
+
+| Report Type | Max Visuals | Notes |
+|---|---|---|
+| Executive summary (KPI page) | 6–8 | Users expect < 3 second load |
+| Detailed analysis page | 10–12 | Users accept slightly longer load |
+| Drill-through page | 8–10 | Only queried on demand (deferred) |
+| Tooltip page | 1–3 | Must render < 1 second (shown on hover) |
+
+**Agent rule**: Flag any page with > 12 visuals as 🟠 High finding — "Page has {N} visuals; recommend ≤ 12 for acceptable load time."
+
+### 7.2 Matrix over Cards — Consolidation Pattern
+
+> **Rule**: A single matrix with conditional formatting is always more performant than multiple individual card visuals showing the same data.
+
+| Approach | DAX Queries | Performance |
+|---|---|---|
+| 5 separate Card visuals (one per KPI) | 5 queries | ❌ 5 round-trips to SSAS |
+| 1 Matrix with 5 measures as Values | 1 query | ✅ Single round-trip |
+| 1 Matrix styled to look like cards | 1 query | ✅ Same visual effect, 80% fewer queries |
+
+**How to style a Matrix as KPI cards:**
+1. Place measures in Values only (no Row/Column fields)
+2. Remove all grid lines, row/column headers, and totals
+3. Apply conditional formatting: background colour, font size per value
+4. Add data bars or KPI icons via conditional formatting rules
+5. Result: visually indistinguishable from individual cards
+
+**Other consolidation patterns:**
+| Instead of... | Use... | Queries saved |
+|---|---|---|
+| 3+ separate Gauge visuals | 1 clustered bar with reference lines | N - 1 |
+| Multiple text boxes with measures | 1 Table visual (measures as rows) | N - 1 |
+| Separate charts per category | 1 chart with Legend (or Small Multiples) | N - 1 |
+| KPI visual per metric | 1 Matrix with conditional icons | N - 1 |
+
+**Agent rule**: When recommending KPI display for 3+ related metrics, always recommend the Matrix consolidation pattern first. If the user prefers individual cards, note the performance trade-off in the decisions register.
+
+### 7.3 Query Reduction Techniques
+
+| Technique | Impact | How to apply |
+|---|---|---|
+| **Disable visual interactions** | High — up to 50% fewer queries | Format → Edit interactions → set to **None** for visuals that don't analytically relate |
+| **Page-level filters over Slicers** | Medium — 1 query per slicer removed | Slicers are visuals with their own query; page filters are metadata (no query) |
+| **Sync slicers sparingly** | Medium — each synced page loads the slicer | Only sync when user expectation requires persistent selection across pages |
+| **Drillthrough over navigation** | High — defers all target page queries | Target page only fires queries when invoked, not when parent loads |
+| **Reduce slicer cardinality** | Medium | Top N filter on slicer, or group into bands (e.g., age ranges not individual ages) |
+
+**Agent rule**: During Phase 9 (Refresh & Performance), recommend disabling interactions for non-related visuals. Document which interactions are active and why.
+
+### 7.4 Visual Type Performance Guidance
+
+From fastest to slowest for the same data volume:
+
+| Rank | Visual | Notes |
+|---|---|---|
+| 1 | Card / Multi-row Card | Single scalar query — fastest |
+| 2 | Table / Matrix | Tabular scan, well-optimised engine path |
+| 3 | Bar / Column / Stacked Bar | Group-by + aggregate — very fast |
+| 4 | Line chart | Date axis aggregation — fast if grain is reasonable (month/quarter) |
+| 5 | Combo chart | Two measures on same axis — slightly more than line |
+| 6 | Scatter / Bubble | Two measures + category — moderate |
+| 7 | Map (filled/bubble) | Geocoding overhead + Bing rendering |
+| 8 | Decomposition tree | Dynamic DAX per expansion — can be very slow |
+
+**Agent rule**: Prefer rank 1–4 visuals for executive summary pages. Maps and decomposition trees belong on detail/drill-through pages only.
+
+### 7.5 Time-Series Grain and Data Points
+
+| Date Grain | Max data points per series | When to use |
+|---|---|---|
+| Daily | 90 (one quarter) | Current quarter detail only |
+| Weekly | 52 (one year) | Year-over-year trends |
+| Monthly | 36 (three years) | Standard trending |
+| Quarterly | 20 (five years) | Long-range strategic |
+
+**Rule**: Never show > 365 daily data points in a single line chart on initial load. Default to month/quarter grain; let users drill to daily via drill-through or filter.
+
+**Agent rule**: If a design calls for a date-axis line chart, confirm the default grain with the user. Flag daily grain for > 1 year as 🟡 Medium finding.
+
+### 7.6 Interaction Settings Methodology
+
+For each page during design:
+1. List all slicers and visuals that can act as cross-filters
+2. For each pair, ask: "Does filtering [Visual A] by selecting in [Visual B] provide analytical value?"
+3. If **No** → set to None
+4. If **Yes but not obvious** → set to **Filter** (not Highlight) — fewer visual queries
+5. Document active interactions in the spec (Phase 9 output)
+
+### 7.7 Conditional Formatting as Performance Tool
+
+| Instead of... | Use... | Why faster |
+|---|---|---|
+| Multiple visuals shown/hidden by bookmarks | 1 visual with conditional format rules | Fewer visuals = fewer queries; CF is client-side |
+| Separate "good/bad" indicator cards | Conditional background colour on a Matrix cell | 1 query vs N queries |
+| Traffic-light icons as separate images | KPI conditional formatting (icons column) | No image rendering overhead |
+
+### 7.8 Performance Analyzer Workflow
+
+**Mandatory for report review** (when reviewing an existing .pbix):
+
+1. View → **Performance Analyzer** → Start recording
+2. **Refresh visuals** (captures all page queries)
+3. Sort by **Duration DESC**
+4. Flag any visual > 3 seconds as 🟠 High finding
+5. Flag any page where total > 8 seconds as 🔴 Critical finding
+
+Breakdown:
+- **DAX query** time > 2s → optimise the measure or model
+- **Visual rendering** time > 1s → too many data points or complex custom visual
+- **Other** time > 1s → SSAS capacity or network latency
+
+**Agent rule**: When reviewing a report, if Performance Analyzer data is available (screenshot or export), use it to prioritise findings by actual measured impact rather than theoretical concerns.
