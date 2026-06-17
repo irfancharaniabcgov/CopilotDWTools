@@ -6,19 +6,16 @@
 
 ---
 
-## Assignments (Implementation Ready)
+## Assignments (Final — Implemented)
 
 ### 1. dw-report-designer
 
 | Phase | Model | Cost | Rationale |
 |---|---|---|---|
-| **Phase 1** (Basic Q1–Q3) | **Claude Sonnet 4.6** | $3.00/1M input | Quality critical; contradiction detection >90% needed to prevent rework. User priority = quality for interviews. |
-| **Phase 2** (Spec validation) | **GPT-5.5** | $5.00/1M input | Complex edge cases (e.g., "is this grain compatible with existing DW?"). Powerful tier justified. |
-| **Phase 3+** (Build coordination) | **GPT-5.5** | $5.00/1M input | Orchestrates other agents; needs strong reasoning. |
+| **All phases (1–7)** | **Claude Sonnet 4.6** | $3.00/1M input | Quality critical; contradiction detection for interviews. Single model for entire session. |
+| **Mode P sub-agent** | **Claude Haiku 4.5** | $1.00/1M input | Background task; source profiling Q1–Q10 only; selective refs (source-system-analysis.md). |
 
-**Optimization**: Implement cache on Q1–Q3 (fiscal year, refresh cadence, consumers). These repeat across interviews. Cache savings: 5–10% of Phase 1 cost.
-
-**Monitor**: Track contradiction detection rate. If < 90%, revert Phase 1 to Opus 4.7 (temporary fallback, then revisit after quality improvement).
+**External review gates**: GPT models invoked on demand (not within this agent's session).
 
 ---
 
@@ -26,14 +23,11 @@
 
 | Mode | Model | Cost | Rationale |
 |---|---|---|---|
-| **Mode A** (Schema enum, table naming) | Claude Haiku 4.5 | $1.00/1M input | Deterministic checklist; no reasoning needed. |
-| **Mode B** (Tabular model structure: relationships, naming, roles) | Claude Haiku 4.5 | $1.00/1M input | Pattern matching against `ssas-tabular-bp.md`; no semantic reasoning. |
-| **Mode D** (DAX measure pattern: DIVIDE, VAR, format, structure) | **GPT-5.4** | $2.50/1M input | Pattern matching against `sqlbi-dax-patterns.md`; Versatile tier sufficient. |
-| **Mode M** (Pipeline boilerplate, task ordering) | Claude Haiku 4.5 | $1.00/1M input | Boilerplate generation; no reasoning. |
+| **All modes (orchestrator)** | Claude Haiku 4.5 | $1.00/1M input | Front matter model; handles routing, orchestration, all mode conversations. |
+| **Mode A/B sub-agent** | Claude Haiku 4.5 | $1.00/1M input | Background task; structure-only checklist; selective refs (~45K tokens). |
+| **Mode K nano sub-agent** | GPT-5 nano | $0.20/1M input | JSON template fill-in; deterministic; safe failure. Fallback: GPT-5.4-mini. |
 
-**Established fact**: Mode B/D are **structure-only**, not semantic reasoning (user's "does measure compute the right business logic?" ≠ what these modes do). GPT-5.4 is correct, not overkill.
-
-**Optimization**: Haiku on 80% of work (modes A, B, M); GPT-5.4 only for measure patterns (mode D). Estimated savings: 60% vs current all-GPT-5.4.
+**External review gates**: GPT models invoked on demand (not within this agent's session).
 
 ---
 
@@ -41,26 +35,16 @@
 
 | Task | Model | Cost | Rationale |
 |---|---|---|---|
-| **Q-query generation** (infer descriptions from DDL, SP code, DAX) | Claude Sonnet 4.6 | $3.00/1M input | Inference-heavy; needs reliability. Sonnet balances cost + quality. |
-| **Batch template substitution** | Claude Haiku 4.5 | $1.00/1M input | Parameterization only; no inference. |
-
-**Established fact**: db-documenter currently uses Sonnet 4.6 (unchanged).
+| **All tasks** | Claude Sonnet 4.6 | $3.00/1M input | Inference-heavy description generation; reliability needed. |
 
 ---
 
-### 4. Nano Model (GPT-5 nano, $0.20/1M input)
+### 4. Nano Model (GPT-5 nano, $0.20/1M input) — Confirmed
 
-**Scope**: Only trivial, non-blocking tasks. Examples (to be confirmed):
-- Format a 1-sentence status message
-- Substitute parameters into a template (no inference)
-- Validate syntax of a JSON config (not semantics)
-
-**Prerequisite rule**: Nano must:
-1. Receive full context (no assumptions about prior state)
-2. Fail explicitly when uncertain (escalate to higher model, don't guess)
-3. Produce structured output (JSON/YAML) so orchestrator validates before proceeding
-
-**Status**: Blocked on identifying 2–3 specific nano-eligible tasks.
+Three confirmed tasks (see `decisions/nano-task-identification.md`):
+1. `sp_addextendedproperty` upsert boilerplate (Mode C) — template fill-in
+2. `ssis_catalog_configuration.json` (Mode K) — ✅ implemented
+3. FormatString + DisplayFolder + Description stub (Mode L) — lookup table
 
 ---
 
