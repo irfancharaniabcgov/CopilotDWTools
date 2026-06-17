@@ -89,6 +89,31 @@ This stack is managed by **on-premises Azure DevOps Server** with self-hosted Wi
 
 ---
 
+## Local-First Access Principle
+
+When the workspace contains a VS SSDT project (`*.sqlproj`) or org standard schema folders (`DW/Dimension/`, `DW/Fact/`), **local files are authoritative**. Prefer them over MCP for both reads and writes.
+
+**Detection** (run once on session start): `glob` for `*.sqlproj` at repo root; or check for `DW/Dimension/` and `DW/Fact/` folders.
+
+**Priority**:
+1. **Local SSDT files** — `glob` + `view` on `DW/**/*.sql`; zero MCP tokens
+2. **Live MCP** — only when: files absent, live row counts/statistics needed, or user explicitly requests
+3. **User-pasted DDL** — ad-hoc, no repo
+
+**Writes**: when local files exist, modifications go to `.sql` files — not standalone scripts, not live DB statements.
+
+**Limitations**: no live row counts or index stats when local-only. Note in findings: `"Schema read from repo files — live row counts/statistics unavailable"`.
+
+### Workspace Readiness Check (once per session, before first local read or write)
+
+1. **Branch**: run `git branch --show-current` or ask. Offer to note target branch in `design/decisions.md` if user wants changes isolated. Prompt: *"You're on branch `{branch}`. Work here, or note a feature branch?"*
+2. **Freshness**: ask *"Repo up to date (pulled latest)?"* If uncertain, add to findings: `"Warning: repo freshness unconfirmed."`
+3. **Write gate**: before any file edit: *"Writing to `.sql` files on branch `{branch}`. Confirm?"*
+
+Record confirmation — do not re-ask in the same session.
+
+---
+
 ## Upstream-First Design Philosophy (Roche's Maxim)
 
 > **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
@@ -233,7 +258,12 @@ Prompt:
 
 You are **Mode A (DW Schema Review)** from the `sql-dw-dimensional-review` skill.
 
-**Input**: SQL Server connection [server/database] OR DDL
+**Input**: SQL Server connection [server/database] OR DDL OR SSDT project files
+
+**Step 0 — Workspace detection** (do first):
+- `glob` for `*.sqlproj` at repo root; or check for `DW/Dimension/` and `DW/Fact/` folders
+- If found → use Path 0 (local files, preferred): `glob` on `DW/Dimension/*.sql`, `DW/Fact/*.sql`, `DW/Staging/*.sql`, `DW/Internal/*.sql`; parse `CREATE TABLE` DDL; check `Scripts/ExtendedProperties/` for existing property scripts
+- If not found → use Path 1 (live MCP connection) or Path 2 (user-pasted DDL)
 
 **Your task**:
 1. Enumerate all tables; classify as Fact / Dimension / Bridge / Staging / Internal / Reference
@@ -285,7 +315,7 @@ If any check fails, fix the output before presenting. Note what was corrected in
 When the user provides a database connection, SSAS endpoint, model file, or schema DDL, determine the appropriate mode:
 
 ### Mode A — SQL Server DW Schema Review
-**Trigger**: User provides a SQL Server connection string, database name, or schema DDL
+**Trigger**: SSDT project detected in workspace (Path 0, preferred) OR user provides SQL Server connection string, database name, or schema DDL
 
 **Step 1: Connect and enumerate**
 ```sql
@@ -427,6 +457,8 @@ If `design/` does not exist yet (ad-hoc invocation outside a project repo), prod
 
 **Process**:
 1. Enumerate all fact tables and their FK columns via:
+   - **Path 0 (preferred)**: if SSDT files present, parse `REFERENCES` / `FOREIGN KEY` clauses from `DW/Fact/*.sql` CREATE TABLE DDL
+   - **Path 1 (fallback)**: live MCP query when SSDT files absent or no FK constraints in DDL:
 ```sql
 SELECT
     OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) AS FactTable,

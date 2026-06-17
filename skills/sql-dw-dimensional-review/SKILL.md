@@ -14,6 +14,31 @@ configuration, and deployment artifact you generate **must be executable from a 
 no manual interaction**. Before finalizing any output, validate it against the deployment checklist
 in `references/devops-operations-patterns.md` Section 9.
 
+## Local-First Access Principle
+
+When the workspace contains a VS SSDT database project (`*.sqlproj`) or the org's standard schema folders (`DW/Dimension/`, `DW/Fact/`), those **local files are the authoritative source** — treat them as you would a live database for schema inspection purposes.
+
+**Detection**: `glob` for `*.sqlproj` at the repo root, or check for `DW/Dimension/` and `DW/Fact/` folders.
+
+**Preference order**:
+1. **Local SSDT files** (if detected) — `glob` + `view` on `.sql` files; zero MCP tokens
+2. **Live MCP connection** (`mssql_connect`) — only when: (a) local files absent, (b) live row counts / statistics needed, (c) user explicitly requests
+3. **User-pasted DDL** — ad-hoc fallback when no repo and no live connection
+
+**Writes follow the same rule**: when local files exist, modifications go back to those `.sql` files (not a standalone script, not a live DB statement). The SSDT → DACPAC → deploy cycle is the correct write path.
+
+**Limitations of local-only**: no live row counts or index statistics; extended properties only if `Scripts/ExtendedProperties/` scripts exist. Always note in findings: `"Schema read from repo files — live row counts/statistics unavailable"`.
+
+### Workspace Readiness Check (one-time per session, before first read or write)
+
+When local files are detected, confirm once before proceeding:
+
+1. **Branch**: Ask or run `git branch --show-current` (if `runCommands` available). Confirm the user is on the intended branch. If they want to isolate changes: note the target branch name in `design/decisions.md`; agent cannot create branches but can remind. Example prompt: *"You're on branch `main`. Should I note a feature branch name for these changes, or are you happy to work here?"*
+2. **Freshness**: Ask: *"Are the local files up to date? (pulled latest from remote?)"* If uncertain, note in the coverage report: `"Warning: repo freshness unconfirmed — verify findings against live schema before deploying."`
+3. **Write gate**: Before any file edits (not just generating output to chat): *"I'll write changes directly to the `.sql` files in this repo on branch `{branch}`. Confirm to proceed."*
+
+Record the confirmation in the agent's session context so these questions are not re-asked within the same session.
+
 ## Upstream-First Design Philosophy (Roche's Maxim)
 
 > **"Data should be transformed as far upstream as possible, and as far downstream as necessary."**
@@ -90,7 +115,10 @@ Activate when the user asks to:
 ## Operating Modes
 
 ### Mode A: DW Schema Review
-**Input**: SQL Server connection (via ms-mssql.mssql MCP tools) OR user-pasted DDL / schema output
+**Input** — in preference order (see Local-First Access Principle above):
+- **Path 0 (preferred)**: SSDT project detected in workspace — `glob` on `DW/Dimension/*.sql`, `DW/Fact/*.sql`, `DW/Staging/*.sql`, `DW/Internal/*.sql`, `DW/SSAS/*.sql`; parse `CREATE TABLE` / `CREATE OR ALTER PROCEDURE` / `CREATE VIEW` DDL. Extended properties from `Scripts/ExtendedProperties/` if present.
+- **Path 1**: Live SQL Server connection (via ms-mssql.mssql MCP tools) — use when Path 0 unavailable or live row counts / statistics required.
+- **Path 2**: User-pasted DDL / schema output — ad-hoc fallback.
 **Process**:
 1. Enumerate tables, classify each as Fact / Dimension / Bridge / Staging / Reference
 2. Run grain analysis: check FK structure, identify candidate grains
@@ -135,7 +163,7 @@ Activate when the user asks to:
 **Trigger**: User asks for a bus matrix or enterprise integration map. Also automatically invoked by `dw-report-designer.agent.md` after Phase 6 (Dimensions) sign-off — the agent synthesises the bus matrix from interview answers rather than querying a live schema; Mode E's SQL query is used when augmenting against an existing DW.
 
 **Input (design-time)**: Confirmed fact tables + grains (Phase 3) and confirmed dimensions (Phase 6) from the `dw-report-designer` spec.  
-**Input (existing DW)**: Live SQL Server connection.
+**Input (existing DW)**: Local SSDT files (Path 0, preferred) — parse FK definitions from `CREATE TABLE` DDL in `DW/Fact/*.sql`. Fall back to live SQL Server connection only if SSDT files absent or FK constraints not defined in DDL.
 
 **Process**:
 1. Enumerate all fact tables and their FK columns (from Phase 6 or live schema query)

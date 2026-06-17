@@ -45,7 +45,33 @@ You operate on **existing** databases and models — you do not design new schem
 
 ### 1 — Discovery before drafting
 
-Before asking the user anything, scan the target. For SQL Server: query `sys.extended_properties` + `sys.objects` + `sys.columns` (queries Q-SRC-1/2/3 or Q-DW-1/2/3 in `references/documentation-authoring.md`). For SSAS: query DMVs (Q-SSAS-1/2/3) or parse TMDL files. **The audit is mandatory** — produce a worklist, then process it.
+Before asking the user anything, scan the target.
+
+**For DW / SSAS objects (D2, D3)**: prefer local repo files first (see Local-First Access Principle below). For SQL Server DW: read `DW/**/*.sql` files via `glob`+`view`; parse `CREATE TABLE` / `CREATE OR ALTER PROCEDURE` DDL for column names and types. For SSAS: read TMDL files from `SSAS/{ModelName}/tables/*.tmdl`. Only connect live (MCP) if local files are absent or the user explicitly requests.
+
+**For source databases (D1)**: source systems are external — they have no local files in the DW repo. Always use `mssql_connect` for D1.
+
+**The audit is mandatory** — produce a worklist, then process it.
+
+### Local-First Access Principle (DW + SSAS objects)
+
+When the workspace contains a VS SSDT project (`*.sqlproj`) or org standard schema folders (`DW/Dimension/`, `DW/Fact/`), **local files are authoritative**.
+
+**Detection** (once per session): `glob` for `*.sqlproj` at repo root; or check for `DW/Dimension/` and `DW/Fact/` folders.
+
+**Priority for DW/SSAS work**:
+1. **Local SSDT files** — `glob`+`view` on `DW/**/*.sql`; TMDL folder for SSAS
+2. **Live MCP** — only when files absent, live stats needed, or user explicitly requests
+3. **User-pasted DDL** — ad-hoc fallback
+
+**Writes**: modifications go back to `.sql` files or TMDL files — not standalone scripts unless user chose option (a) or (c) in Principle 3.
+
+**Workspace Readiness Check** (once per session, before first local read or write):
+1. **Branch**: `git branch --show-current` (if runCommands available) or ask. If user wants isolated changes, note branch in `design/decisions.md`.
+2. **Freshness**: ask *"Repo up to date?"* If uncertain, note: `"Warning: repo freshness unconfirmed"` in coverage report.
+3. **Write gate**: before any file edit: *"Writing to `.sql` / TMDL files on branch `{branch}`. Confirm?"*
+
+Record confirmation — do not re-ask within same session.
 
 ### 2 — Codebase-first inference
 
@@ -221,7 +247,7 @@ If GPT-5.4 is unavailable, fall back to `gpt-5.4-mini` or skip the review and pr
 
 **Trigger**: User says "document the DW", "backfill DW descriptions", invoked from `dw-report-designer` Mode N completion, or invoked from `ssas-tabular-dw-architect` Mode A when non-obvious objects were flagged.
 
-**Differences from Mode D1**:
+**Data access**: Local-first. `glob`+`view` on `DW/**/*.sql` to audit table definitions. Check `DW/Scripts/ExtendedProperties/` for existing property scripts. Only connect live (MCP) if local files absent or live stats explicitly requested. Run workspace readiness check (branch + freshness) before any file edits.
 
 - Schema filter: `Dimension`, `Fact`, `Staging`, `Internal`, `SSAS` only
 - **Full property set required** per `extended-properties-templates.md` — not just `MS_Description`:
@@ -249,7 +275,7 @@ Run the DW completeness query in `references/documentation-authoring.md` § 1 (t
 
 **Process**:
 
-1. **Read the model**: prefer DMV (Q-SSAS-1/2/3) if a live AS endpoint is available; otherwise parse TMDL files from `SSAS/{ModelName}/tables/*.tmdl`.
+1. **Read the model**: prefer local TMDL files (`SSAS/{ModelName}/tables/*.tmdl`) — parse directly; zero MCP tokens. Fall back to live DMV (Q-SSAS-1/2/3) only if TMDL files absent or live stats needed.
 2. **Coverage audit**: list visible tables, columns, measures, and relationships with no documentation. Skip `IsPrivate = TRUE`, `IsHidden = TRUE` (unless user requests), and underscore-prefixed columns like `_RowNumber`.
 3. **Inference**:
    - **Tables**: derive from SSAS schema view definition (`SSAS.[ViewName]` in the DW) + the underlying DW table description if one exists. Default format: `Group by: [Dim 1], [Dim 2], ...` per `pbix-report-standards.md`.
@@ -304,7 +330,7 @@ Then ask about data access and external context:
 >
 > *1. Do you have any existing documentation that would help me understand the business domain for this database — data dictionaries, ERDs, wiki pages, or similar? Paste key sections or attach files if so. This helps me draft more accurate descriptions without asking as many questions.*
 >
-> *2. For the coverage audit and schema inspection: I can either (a) connect live to the database and query `sys.objects` / `sys.extended_properties` / DMVs directly, or (b) work from schema files already in this repository (SSDT project, .sql scripts, TMDL files). Live connection gives the most accurate audit (catches recent DDL changes, lets me sample data for PII detection) but uses more tokens. Local files are faster and cheaper but may be out of date. Which do you prefer?"*
+> *2. For the coverage audit and schema inspection: I'll check for local repo files first (SSDT project, .sql scripts, TMDL files) — these are the authoritative source when present. Live connection gives additional live row counts and PII sampling but costs more tokens. If local files are found, I'll default to those unless you tell me otherwise. For source databases (not the DW), I always need a live connection — please provide server + database name."*
 
 **If the user provides external documentation:**
 - Read it and extract entity descriptions, business rules, and domain terminology
