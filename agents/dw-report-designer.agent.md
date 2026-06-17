@@ -412,13 +412,35 @@ Ask all of the following. Wait for answers before proceeding to Step 3.
 
 **If Step 1 finds Dimension or Fact schema tables**, skip this step — the project is an extension of an existing DW.
 
-#### Step 3 — Source system discovery
+#### Step 3 — Source system discovery (Background Task Pattern)
 
-For each source system named in Phase 2, route to the appropriate discovery path based on what the source can provide.
+**Fire discovery as background task** and continue with Phase 3 questions immediately (non-blocking user experience).
 
-**Path A — SQL Server source (automated, full profiling):** Connect to the source database via `mssql_connect` and run **Mode P (Source System Analysis)** from the `sql-dw-dimensional-review` skill, which uses `references/source-system-analysis.md`.
+Tell the user: *"I'm profiling the source systems now in the background — this typically takes a few minutes. While I work, let me ask some Phase 3 questions about your reporting requirements so we make good use of your time."*
 
-Mode P runs discovery queries in this sequence:
+For each source system named in Phase 2, **launch a background `task` agent** to route to the appropriate discovery path:
+
+**Background Task Template — Mode P Discovery (Haiku 4.5)**:
+```
+Agent: task
+Model: claude-haiku-4.5
+Description: "Source system profiling (Mode P discovery)"
+Prompt:
+
+You are Mode P (Source System Analysis) from the `sql-dw-dimensional-review` skill.
+
+**Input**: [source_type], [connection_details or CSV file list]
+**Task**: Run discovery queries (Q1–Q10) and produce `design/entity-map.md`
+**References**: source-system-analysis.md, kimball-patterns.md
+**Output format**: See source-system-analysis.md § "Output: Source Entity Map"
+
+**Your only job**: Complete the discovery queries and produce the entity map.
+Do not wait for user confirmation. Return the map when ready.
+```
+
+**Path A — SQL Server source (automated, full profiling):**
+
+Background task connects via `mssql_connect` and runs **Mode P discovery queries Q1–Q10** in sequence:
 
 1. **Q1–Q5 run once across the full source database** — table inventory, date/status column detection, PK map, FK relationship map, FK count summary — and applies classification heuristics to produce a **Source Entity Map**.
 2. **For each identified Fact candidate**, run Q6 (NULL Rate Check on FK/key columns) and Q8 (Duplicate PK check on the candidate natural key).
@@ -467,35 +489,65 @@ Flag mismatches between what the user described and what the discovery found, in
 
 ---
 
-### Phase 3 — Grain Definition
+### Phase 3 — Grain & Requirements (Parallel with Phase 2 Background Discovery)
+
+**Phase 3 runs in two sub-phases**:
+
+#### Phase 3a — Reporting Requirements (Ask While Phase 2 Queries Run)
+
+**When Phase 2 background task is running**, ask Phase 3a questions. These are **requirements-oriented**, not final grain answers. They will be reconciled against the discovered entities in Phase 3b.
+
+> *"While I'm profiling the source systems, let me ask about your reporting requirements. These will help me understand your needs before we see what data is available."*
+
+Ask all of the following:
+
+- **What are your reporting axes?** (For example: by product type? by geography? by time period? by business unit?)
+  - *Note: These will be reconciled against discovered dimension tables. If a dimension name differs from your phrasing, I'll confirm the mapping.*
+- **What metrics do you need?** (For example: revenue, count, margin, days to complete, customer retention, etc.?)
+  - *Note: These should be independent of discovered entities; we'll validate whether the source data supports them.*
+- **Do you need historical comparisons?** (For example: trend analysis, year-over-year comparisons, prior month baselines?)
+- **At the finest level of detail, what does one row represent to you?** (For example: "one transaction", "one customer visit", "one project phase")
+  - *Provisional answer only — we'll validate this against the actual data.*
+
+**Record these answers.** Do NOT confirm grain yet — Phase 3b reconciles these against Phase 2 discoveries.
+
+---
+
+#### Phase 3b — Phase 2 Discovery Reconciliation (After Background Task Completes)
+
+When Phase 2 background task completes (entity map + gap report ready), present the results to the user:
+
+> *"I've profiled the source systems. Here's what I found. [entity map summary]. Let me cross-check this against your Phase 3a requirements."*
+
+**Reconciliation steps**:
+
+1. **Map Phase 3a requirements against discovered entities**:
+   - *"You said you need reporting by geography — I found a Territory dimension. Is Territory the same as your 'geography' axis? Or are they different?"*
+   - *"You mentioned revenue as a metric — the source has a Revenue column. Is this the metric you need, or is revenue calculated differently in your organisation?"*
+
+2. **Resolve any conflicts** (if Phase 3a requirements don't match discovered entities):
+   - If a dimension is missing: *"You need reporting by [requirement], but the source doesn't have that attribute. Options: (a) extract it from another source, (b) derive it in the DW transform layer, (c) use this proxy instead"*
+   - If a metric can't be computed from available data: *"Your metric requires [data] which isn't available in the source. Options: (a) use this alternative metric, (b) add a new data feed, (c) derive it from available columns"*
+
+3. **Finalize grain** (confirm one row per…):
+   - *"Based on the discovered entities and your Phase 3a requirements, I propose: one row per [entity] [grain]. Does this align with how you want to report?"*
+   - Stress-test grain with 2–3 edge cases (same as before)
+
+4. **Gate**: Do NOT proceed to Phase 4 until grain is confirmed + reconciliation is complete (all conflicts resolved).
+
+---
+
+### Old Phase 3 Questions (Retained for Clarity, Now Part of Phase 3b)
 
 This is the **most critical phase**. The grain defines what one row in the fact table represents. An incorrect grain causes downstream errors that are expensive to fix.
 
 > **What is grain?** The grain is the finest level of detail stored in the fact table. For example: if you are reporting on sales, the grain might be *"one row per invoice line item"* (very detailed) or *"one row per day per product"* (summarised). Getting this right determines which dimensions are valid and which measures are additive.
 
-Ask all of the following questions:
-
-- At the finest level of detail, what does one row in the report represent? (For example: "one transaction", "one customer per month", "one project milestone per reporting period")
-- Does the user need to drill from a summary view down to individual detail rows?
-- Are there multiple grains needed? (For example: a report header showing totals alongside a line-level detail grid — these require separate fact tables)
-- Are there things in this data that can be **open**, **active**, or **in progress** at any given point in time? (For example: open support tickets, active projects, employees currently on leave, contracts not yet closed) If yes: do users need to ask "how many were open *on a specific date*" — or only "how many *started* or *ended* during a period"?
-- If there are open/active things: is it acceptable for the report to show data as of the **previous day's close** (updated nightly), or is real-time "right now" status required?
-
-*These questions are not about the fact table grain directly — they determine whether a periodic snapshot table is more appropriate than a complex measure. Record the answers for use when drafting the specification.*
-
-**After the user answers**, restate the grain back to them in plain language:
-
-> "So one row in the fact table represents [your interpretation]. Is that correct?"
-
-**Before accepting the grain, stress-test it with at least two edge-case scenarios.** Invent specific, concrete situations that probe the boundary of the proposed grain:
+**Edge-case stress tests** (used in Phase 3b reconciliation):
 
 - *"What happens if one [entity] spans two [categories] — is that one row or two rows in the Fact table?"*
 - *"Can a [entity] exist with no [foreign key]? What row does that produce — an Unknown FK row, or is that record excluded entirely?"*
 - *"If the same [entity] is updated twice on the same day, how many rows should appear in the Fact table for that day?"*
-
-Do not accept the grain statement until the user can answer at least one edge-case scenario consistently. If their answer conflicts with the proposed grain, revise the grain and restate it.
-
-**Gate**: Do NOT proceed to Phase 4 until the user explicitly confirms the grain statement, including the edge-case resolution.
 
 ---
 
