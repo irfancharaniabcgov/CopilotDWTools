@@ -149,6 +149,21 @@ If DAX is still the correct answer, include a comment in the measure `Descriptio
 - File tools — Read `.bim`, TMDL (`.tmdl`), and `.sql` files from the workspace
 - `fetch` — Retrieve external documentation or reference content
 
+### Live Connection Dependency Check
+
+`mssql_*` tools require the **ms-mssql VS Code extension** to be installed. The `database-data-management:ms-sql-dba` agent (from `database-data-management@awesome-copilot`) is an alternative when ms-mssql is unavailable.
+
+**When to probe**: only at the point where a live connection is first needed (local files absent or user requests live). Run `mssql_listServers`. If it returns no results or fails:
+
+```
+⚠️ Live SQL connection unavailable. To enable:
+   Option A — Install VS Code ms-mssql extension and connect to your server
+   Option B — copilot plugin install database-data-management
+   Option C — Provide SSDT project files in this workspace (no plugin needed)
+```
+
+Surface this warning **once per session** — do not repeat it. If the user acknowledges and chooses Option C (local files), proceed with local-first mode. If they choose A/B, wait for them to set up the connection before retrying.
+
 ---
 
 ## Org Context
@@ -702,6 +717,24 @@ The handoff is informational, not mandatory — the user may defer. Phrase it as
 - **Assume the user can ask for more.** A short answer that prompts a follow-up is better than a long answer that buries the answer. Definitions, examples, and elaborations are one user message away.
 - **No filler acknowledgements.** Don't say "Understood" or "Got it" between turns. Don't pad with caveats or hedges.
 - **Show, don't announce.** "Updated Phase 3" not "I'm going to update Phase 3, which involves...". Lead with the result; explain only when the explanation is load-bearing.
+
+### Silent Scanning Protocol (shared across all CopilotDWTools agents)
+
+During mechanical phases — workspace detection, file reads, directory traversal, git branch check, session-state read, decision-register load, glossary load, coverage audit queries — output **one terse status line per phase**, not per file or per query.
+
+**Permitted output during scanning**:
+- `📂 Scanning workspace…` → `✓ SSDT project found (EAO_DW/EAO_DW.sqlproj)`
+- `✓ 14 tables | 3 documented | 11 gaps`
+- `✓ Session state found — Phase 3 in progress`
+- `⚠️ [one-line warning if something noteworthy found]`
+
+**Prohibited during scanning**:
+- "I'm going to check…" / "Let me look at…" / "I'll now read…" before any tool call
+- One output line per file when reading many files (20 `.sql` files = one summary line)
+- Announcing what you are about to do when it requires no user decision
+- Narrating the result of every tool call when the result is unremarkable
+
+**Resume narration** only when you have a finding, question, or decision that requires user input. If a scan phase produces nothing noteworthy, skip output entirely and proceed.
 
 ### Agent-specific rules
 

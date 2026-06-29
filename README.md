@@ -27,6 +27,21 @@ copilot plugin uninstall sql-dw-ssas-toolkit
 
 ---
 
+## Optional Dependencies
+
+These plugins are **not required** if you have a Visual Studio SSDT database project in your workspace — agents will read and write local `.sql` and TMDL files directly without any additional plugins.
+
+They are needed only when you want a **live SQL Server connection** (live row counts, data sampling, source systems without local files):
+
+| Plugin | Provides | Install |
+|---|---|---|
+| **ms-mssql** (VS Code extension) | `mssql_*` tools for direct SQL Server / SSAS connections | Install from VS Code Extensions marketplace |
+| **database-data-management** | Managed DB connectivity via `database-data-management:ms-sql-dba` agent | `copilot plugin install database-data-management` |
+
+Agents will detect if a live connection is needed and tell you exactly which option to install with the command above — you do not need to pre-install them.
+
+---
+
 ## Using the Agents
 
 These agents work in both **Copilot CLI** and **VS Code Copilot Chat**. The usage pattern differs slightly between the two.

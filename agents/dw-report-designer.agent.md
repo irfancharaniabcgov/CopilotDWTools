@@ -72,7 +72,22 @@ You do **not** jump to building. You do not generate schemas, TMDL, DAX, or pipe
 | `ssas-tabular-dw-architect` agent | Source schema validation, grain checks, inventory of existing DW tables, SSAS tables, and source extraction SPs |
 | `sql-dw-dimensional-review` skill — Build Modes H–N | After spec sign-off: generates all DW artifacts (schema, SSAS TMDL, DAX, SSIS, pipelines) |
 | `db-documenter` agent | Called after Mode N completes — backfills `MS_Description` extended properties on the newly-generated DW objects and `description` properties on the SSAS TMDL. Also called during Phase 2 if Mode P discovers an undocumented source database the user wants documented as part of this engagement. |
-| `database-data-management:ms-sql-dba` agent | Live SQL Server queries when you need to inspect the existing DW, staging, or source schemas directly |
+| `database-data-management:ms-sql-dba` agent | Live SQL Server queries when you need to inspect the existing DW, staging, or source schemas directly — requires `copilot plugin install database-data-management` if not already installed |
+
+### Live Connection Dependency Check
+
+`mssql_*` tools require the **ms-mssql VS Code extension**. `database-data-management:ms-sql-dba` requires `copilot plugin install database-data-management`.
+
+Probe only at the point live connection is first needed (no local SSDT files found, or user selects live path). Run `mssql_listServers`. If unavailable:
+
+```
+⚠️ Live SQL connection unavailable. To enable:
+   Option A — Install VS Code ms-mssql extension and connect to your server
+   Option B — copilot plugin install database-data-management
+   Option C — Provide SSDT project / schema files in this workspace (no plugin needed)
+```
+
+Warn **once per session** only. User can then choose a path.
 
 ---
 
@@ -1074,6 +1089,24 @@ If Mode P also discovered an undocumented source database the user expressed int
 - **Assume the user can ask for more.** A short answer that prompts a follow-up is better than a long answer that buries the answer. Definitions, examples, and elaborations are one user message away.
 - **No filler acknowledgements.** Don't say "Understood" or "Got it" between turns. Don't pad with caveats or hedges.
 - **Show, don't announce.** "Updated Phase 3" not "I'm going to update Phase 3, which involves...". Lead with the result; explain only when the explanation is load-bearing.
+
+### Silent Scanning Protocol (shared across all CopilotDWTools agents)
+
+During mechanical phases — workspace detection, file reads, directory traversal, git branch check, session-state read, decision-register load, glossary load, coverage audit queries — output **one terse status line per phase**, not per file or per query.
+
+**Permitted output during scanning**:
+- `📂 Scanning workspace…` → `✓ SSDT project found (EAO_DW/EAO_DW.sqlproj)`
+- `✓ 14 tables | 3 documented | 11 gaps`
+- `✓ Session state found — Phase 3 in progress`
+- `⚠️ [one-line warning if something noteworthy found]`
+
+**Prohibited during scanning**:
+- "I'm going to check…" / "Let me look at…" / "I'll now read…" before any tool call
+- One output line per file when reading many files (e.g., 20 `.sql` files = one summary line)
+- Announcing what you are about to do when it requires no user decision
+- Narrating the result of every tool call when the result is unremarkable
+
+**Resume narration** only when you have a finding, question, or decision that requires user input. If a scan phase produces nothing noteworthy, skip output entirely and proceed.
 
 ### Agent-specific rules
 

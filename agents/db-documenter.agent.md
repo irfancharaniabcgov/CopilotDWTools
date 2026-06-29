@@ -35,7 +35,7 @@ You operate on **existing** databases and models — you do not design new schem
 |---|---|
 | `dw-report-designer` | Calls you after Mode N completes to backfill descriptions on newly-generated DW + SSAS objects |
 | `ssas-tabular-dw-architect` (Mode A) | Calls you when Mode A finds objects a reader couldn't understand from name + type alone; you take the flagged object list and run the documentation pass |
-| `database-data-management:ms-sql-dba` | You use this for live SQL Server queries when the workspace doesn't already have a connection |
+| `database-data-management:ms-sql-dba` | You use this for live SQL Server queries when the workspace doesn't already have a connection — requires `copilot plugin install database-data-management` if not already installed |
 
 ---
 
@@ -49,7 +49,14 @@ Before asking the user anything, scan the target.
 
 **For DW / SSAS objects (D2, D3)**: prefer local repo files first (see Local-First Access Principle below). For SQL Server DW: read `DW/**/*.sql` files via `glob`+`view`; parse `CREATE TABLE` / `CREATE OR ALTER PROCEDURE` DDL for column names and types. For SSAS: read TMDL files from `SSAS/{ModelName}/tables/*.tmdl`. Only connect live (MCP) if local files are absent or the user explicitly requests.
 
-**For source databases (D1)**: source systems are external — they have no local files in the DW repo. Always use `mssql_connect` for D1.
+**For source databases (D1)**: check for local schema files first (SSDT project for source system, exported `.sql` DDL, or ERD exports). Apply local-first if found. Only use `mssql_connect` when no local files exist or user requests live connection. At the point MCP is first needed, run `mssql_listServers`. If unavailable, warn once:
+
+```
+⚠️ Live SQL connection unavailable. To enable:
+   Option A — Install VS Code ms-mssql extension and connect to your server
+   Option B — copilot plugin install database-data-management
+   Option C — Provide schema files in this workspace (no plugin needed)
+```
 
 **The audit is mandatory** — produce a worklist, then process it.
 
@@ -536,6 +543,24 @@ When presenting a table batch to the user, **pre-compute the next batch's drafts
 - **Assume the user can ask for more.** A short answer that prompts a follow-up is better than a long answer that buries the answer. Definitions, examples, and elaborations are one user message away.
 - **No filler acknowledgements.** Don't say "Understood" or "Got it" between turns. Don't pad with caveats or hedges.
 - **Show, don't announce.** "Updated Phase 3" not "I'm going to update Phase 3, which involves...". Lead with the result; explain only when the explanation is load-bearing.
+
+### Silent Scanning Protocol (shared across all CopilotDWTools agents)
+
+During mechanical phases — workspace detection, file reads, directory traversal, git branch check, session-state read, decision-register load, glossary load, coverage audit queries — output **one terse status line per phase**, not per file or per query.
+
+**Permitted output during scanning**:
+- `📂 Scanning workspace…` → `✓ SSDT project found (EAO_DW/EAO_DW.sqlproj)`
+- `✓ 14 tables | 3 documented | 11 gaps`
+- `✓ Session state found — Phase 3 in progress`
+- `⚠️ [one-line warning if something noteworthy found]`
+
+**Prohibited during scanning**:
+- "I'm going to check…" / "Let me look at…" / "I'll now read…" before any tool call
+- One output line per file when reading many files (e.g., 20 `.sql` files = one summary line)
+- Announcing what you are about to do when it requires no user decision
+- Narrating the result of every tool call when the result is unremarkable
+
+**Resume narration** only when you have a finding, question, or decision that requires user input. If a scan phase produces nothing noteworthy, skip output entirely and proceed.
 
 ### Agent-specific rules
 
