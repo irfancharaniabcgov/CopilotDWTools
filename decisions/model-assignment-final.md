@@ -1,7 +1,7 @@
 # Agent Model Assignment — Final Recommendations
 
 **Date**: 2026-06-17  
-**Status**: Ready to implement  
+**Status**: ⚠️ Archived — model pins removed 2026-06-29. Specific model versions in this file are historical reference only. Agents now use session default model; see qualitative tier guidance in each agent's "Model Guidance" section.  
 **Decision basis**: Pricing analysis + capability matrix + user preferences (quality > cost for interviews; Claude for implementation; GPT for gates)
 
 ---

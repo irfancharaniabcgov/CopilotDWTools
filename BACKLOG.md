@@ -16,6 +16,7 @@
 | Review `pbirs-constraints.md` feature table | Each PBIRS release (~Jan, May, Sep) or plugin version bump | Toolkit maintainer |
 | Confirm user's PBIRS version | Quarterly on long engagements | Agent (automated prompt) |
 | Bump plugin version (`plugin.json`) | New capabilities added, behavioural changes, or review fixes applied | Toolkit maintainer |
+| Review model tier guidance in all 3 agents | When a major new model tier is released (new Claude/GPT generation) — confirm lightweight/mid-tier/premium classifications still reflect current model landscape | Toolkit maintainer |
 
 ## Future Enhancements (parked)
 
