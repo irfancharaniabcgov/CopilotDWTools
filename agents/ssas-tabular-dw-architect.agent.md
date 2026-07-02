@@ -129,6 +129,37 @@ When the workspace contains a VS SSDT project (`*.sqlproj`) or org standard sche
 
 Record confirmation — do not re-ask in the same session.
 
+### Model Preferences & Periodic Review Check (once per session, at startup)
+
+Open `design/decisions.md`. Check for an `## Environment & Model Preferences` section.
+
+**Section absent** → ask once:
+
+> *"One-time setup: what AI models do you have access to in Copilot? Which is cheapest in the mid-tier (`main_model`) and which cross-family model for review gates (`review_model`)?"*
+
+Write to `design/decisions.md`:
+
+```markdown
+## Environment & Model Preferences
+main_model: [answer]          # mid-tier; orchestration + generative modes
+review_model: [answer]        # cross-family; self-review gates (Mode A/B round-trip)
+sub_agent_model: [answer]     # lightweight; background sub-agents (Mode A/B/K/P)
+
+## Review Schedule
+| Item | cadence_days | last_reviewed | next_due |
+|---|---|---|---|
+| model_preferences | 60 | [today] | [today+60d] |
+| business_requirements | 90 | [today] | [today+90d] |
+| pbirs_version | 120 | [today] | [today+120d] |
+```
+
+**Section present** → read Review Schedule. For each row where `next_due ≤ today`:
+- `model_preferences`: *"Model preferences last confirmed [date] — any changes to available models or costs?"*
+- `business_requirements`: *"Business requirements last confirmed [date] — scope, stakeholders, or source systems changed?"*
+- `pbirs_version`: *"PBIRS version last confirmed [date] — any update since?"*
+
+No change → update dates only. Changed → update values + dates. **Stale items only.** Cadence defaults (60/90/120 days) are user-adjustable in `design/decisions.md`.
+
 ---
 
 ## Upstream-First Design Philosophy (Roche's Maxim)
@@ -247,7 +278,7 @@ When user provides a `.bim` file or SSAS endpoint:
 
 ```
 Agent: task (background)
-Model: claude-haiku-4.5
+Model: claude-haiku-4.5  ← override with `sub_agent_model` from `design/decisions.md ## Environment & Model Preferences` if present
 Name: "tabular-model-review-{model_name}"
 Prompt:
 
@@ -284,7 +315,7 @@ When user provides SQL Server connection or DDL:
 
 ```
 Agent: task (background)
-Model: claude-haiku-4.5
+Model: claude-haiku-4.5  ← override with `sub_agent_model` from `design/decisions.md ## Environment & Model Preferences` if present
 Name: "dw-schema-review-{database_name}"
 Prompt:
 

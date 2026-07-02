@@ -14,9 +14,10 @@
 | Task | Trigger | Owner |
 |---|---|---|
 | Review `pbirs-constraints.md` feature table | Each PBIRS release (~Jan, May, Sep) or plugin version bump | Toolkit maintainer |
-| Confirm user's PBIRS version | Quarterly on long engagements | Agent (automated prompt) |
+| Confirm user's PBIRS version | **Agent-managed** — prompted automatically at session start when `pbirs_version` row in `design/decisions.md ## Review Schedule` is stale (default: 120-day cadence) | Agent (automated) |
 | Bump plugin version (`plugin.json`) | New capabilities added, behavioural changes, or review fixes applied | Toolkit maintainer |
-| Review model tier guidance in all 3 agents | When a major new model tier is released (new Claude/GPT generation) — confirm lightweight/mid-tier/premium classifications still reflect current model landscape | Toolkit maintainer |
+| Review model tier guidance in all 3 agents | **Agent-managed** — users are prompted at session start when `model_preferences` row is stale (default: 60-day cadence). Toolkit maintainer should also review tier labels when a new model generation releases. | Agent (automated) + toolkit maintainer |
+| Review business requirements / scope | **Agent-managed** — prompted at session start when `business_requirements` row is stale (default: 90-day cadence) | Agent (automated) |
 
 ## Future Enhancements (parked)
 

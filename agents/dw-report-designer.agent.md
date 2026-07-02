@@ -154,7 +154,40 @@ Load it and treat all terms as canonical for this session. When the user uses a 
 **If `design/glossary.md` does not exist:**
 Do not create it yet. Create it the first time a term is formally defined and agreed upon during the interview.
 
-**Step 3 — External documentation and data access:**
+**Step 3 — Model Preferences & Periodic Review Check** (skip entirely if this is a resumed session):
+
+Open `design/decisions.md`. Check for an `## Environment & Model Preferences` section.
+
+**Section absent** (new project or first-time setup) → ask once before Phase 1:
+
+> *"One-time setup: what AI models do you have access to in Copilot (e.g. Claude Sonnet, GPT-4o, Gemini Pro)? Which is cheapest in the mid-tier — that'll be `main_model` for interviews. And which cross-family model for review gates — `review_model`?"*
+
+Write to `design/decisions.md`:
+
+```markdown
+## Environment & Model Preferences
+main_model: [answer]          # mid-tier; used for main work + interviews
+review_model: [answer]        # cross-family; used for spec validation + review gates
+sub_agent_model: [answer]     # lightweight; used for Mode P background sub-agent
+
+## Review Schedule
+| Item | cadence_days | last_reviewed | next_due |
+|---|---|---|---|
+| model_preferences | 60 | [today] | [today+60d] |
+| business_requirements | 90 | [today] | [today+90d] |
+| pbirs_version | 120 | [today] | [today+120d] |
+```
+
+Cadence defaults are user-adjustable — user can edit `cadence_days` directly.
+
+**Section present** → read the Review Schedule. For each row where `next_due ≤ today`, prompt a brief check:
+- `model_preferences`: *"Model preferences last confirmed [date] — any changes to available models or costs?"*
+- `business_requirements`: *"Business requirements last confirmed [date] — scope, stakeholders, or source systems changed?"*
+- `pbirs_version`: *"PBIRS version last confirmed [date] — any update since?"*
+
+If user says **no change**: update `last_reviewed` = today, `next_due` = today + `cadence_days`. If user says **yes**: update values and dates, note what changed. **Stale items only — do not prompt items that are not yet due.**
+
+**Step 4 — External documentation and data access:**
 
 Ask these two questions before starting Phase 1 (skip if this is a resumed session — these were already answered):
 
@@ -447,10 +480,10 @@ Tell the user: *"I'm profiling the source systems now in the background — this
 
 For each source system named in Phase 2, **launch a background `task` agent** to route to the appropriate discovery path:
 
-**Background Task Template — Mode P Discovery (Haiku 4.5)**:
+**Background Task Template — Mode P Discovery**:
 ```
 Agent: task (background mode)
-Model: claude-haiku-4.5
+Model: claude-haiku-4.5  ← override with `sub_agent_model` from `design/decisions.md ## Environment & Model Preferences` if present
 Description: "Source system profiling (Mode P discovery)"
 Name: "source-profiling-{source_name}"
 Prompt:

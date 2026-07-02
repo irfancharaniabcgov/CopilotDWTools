@@ -1,7 +1,7 @@
 # Agent Model Assignment — Final Recommendations
 
 **Date**: 2026-06-17  
-**Status**: ⚠️ Archived — model pins removed 2026-06-29. Specific model versions in this file are historical reference only. Agents now use session default model; see qualitative tier guidance in each agent's "Model Guidance" section.  
+**Status**: ⚠️ Archived — model pins removed 2026-06-29. Specific model versions in this file are historical reference only. Agents now use session default model; see qualitative tier guidance in each agent's "Model Guidance" section. As of 2026-07-02, model preferences (main/review/sub-agent) are captured from the user at session start and stored in `design/decisions.md ## Environment & Model Preferences`, with a 60-day refresh cadence.  
 **Decision basis**: Pricing analysis + capability matrix + user preferences (quality > cost for interviews; Claude for implementation; GPT for gates)
 
 ---

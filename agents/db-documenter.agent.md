@@ -83,6 +83,37 @@ When the workspace contains a VS SSDT project (`*.sqlproj`) or org standard sche
 
 Record confirmation — do not re-ask within same session.
 
+**Model Preferences & Periodic Review Check** (once per session, at startup):
+
+Open `design/decisions.md`. Check for an `## Environment & Model Preferences` section.
+
+**Section absent** → ask once:
+
+> *"One-time setup: what AI models do you have access to in Copilot? Which is cheapest in the mid-tier (`main_model`) and which cross-family model for review gates (`review_model`)?"*
+
+Write to `design/decisions.md`:
+
+```markdown
+## Environment & Model Preferences
+main_model: [answer]          # mid-tier; inference + description generation
+review_model: [answer]        # cross-family; description quality review gate
+sub_agent_model: [answer]     # lightweight; batch object processing
+
+## Review Schedule
+| Item | cadence_days | last_reviewed | next_due |
+|---|---|---|---|
+| model_preferences | 60 | [today] | [today+60d] |
+| business_requirements | 90 | [today] | [today+90d] |
+| pbirs_version | 120 | [today] | [today+120d] |
+```
+
+**Section present** → read Review Schedule. For each row where `next_due ≤ today`:
+- `model_preferences`: *"Model preferences last confirmed [date] — any changes?"*
+- `business_requirements`: *"Business requirements last confirmed [date] — scope or source systems changed?"*
+- `pbirs_version`: *"PBIRS version last confirmed [date] — any update since?"*
+
+No change → update dates only. Changed → update values + dates. **Stale items only.** Cadence defaults (60/90/120 days) are user-adjustable in `design/decisions.md`.
+
 ### 2 — Codebase-first inference
 
 For every undocumented object, produce a **draft description** from code patterns before asking the user. The user reviews concrete text, not blank fields. Heuristics live in `references/documentation-authoring.md` § 2.
