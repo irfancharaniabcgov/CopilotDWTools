@@ -135,7 +135,7 @@ Open `design/decisions.md`. Check for an `## Environment & Model Preferences` se
 
 **Section absent** → ask once:
 
-> *"One-time setup: what AI models do you have access to in Copilot? Which is cheapest in the mid-tier (`main_model`) and which cross-family model for review gates (`review_model`)?"*
+> *"One-time setup: what AI models do you have access to in Copilot? Which is cheapest in the mid-tier (e.g., Claude Sonnet, GPT-4o, Gemini 1.5 Pro) — that'll be `main_model`. And which cross-family model for review gates — `review_model`? See README.md Model Tiers for tier definitions."*
 
 Write to `design/decisions.md`:
 

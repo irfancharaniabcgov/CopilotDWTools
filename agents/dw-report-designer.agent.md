@@ -160,7 +160,7 @@ Open `design/decisions.md`. Check for an `## Environment & Model Preferences` se
 
 **Section absent** (new project or first-time setup) → ask once before Phase 1:
 
-> *"One-time setup: what AI models do you have access to in Copilot (e.g. Claude Sonnet, GPT-4o, Gemini Pro)? Which is cheapest in the mid-tier — that'll be `main_model` for interviews. And which cross-family model for review gates — `review_model`?"*
+> *"One-time setup: what AI models do you have access to in Copilot? Which is cheapest in the mid-tier (e.g., Claude Sonnet, GPT-4o, Gemini 1.5 Pro) — that'll be `main_model`. And which cross-family model for review gates — `review_model`? See README.md Model Tiers for tier definitions."*
 
 Write to `design/decisions.md`:
 

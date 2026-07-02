@@ -42,7 +42,43 @@ Agents will detect if a live connection is needed and tell you exactly which opt
 
 ---
 
-## Using the Agents
+---
+
+## Model Tiers
+
+All agents use your current Copilot session default model. You control model selection per-session:
+
+```bash
+copilot --agent dw-report-designer --model claude-sonnet-4.6
+```
+
+### Tier definitions
+
+**Lightweight** (code review, boilerplate, structure-only tasks):
+- Claude Haiku, GPT-4o Mini, Gemini 1.5 Flash
+- ~$1–2 per 1M tokens
+- Fast, deterministic; suitable for checklists and template fill-in
+
+**Mid-tier** (interviews, inference, schema design, DAX generation):
+- Claude Sonnet, GPT-4o, Gemini 1.5 Pro
+- ~$3–5 per 1M tokens
+- High-quality reasoning; recommended for requirements gathering, semantic design, contradiction detection
+
+**Premium** (deep reasoning, security review, complex refactoring):
+- Claude Opus, GPT-5.4, GPT-5.5
+- ~$5–15 per 1M tokens
+- Reserved for complex multi-step reasoning, high-stakes decisions
+
+### Cross-family review rule
+
+Review gates, self-review, and rubber-ducking must use a **different model family** from the one that produced the work:
+- Claude work → review with GPT (same tier sufficient; no need to escalate to premium)
+- GPT work → review with Claude (same tier sufficient)
+- Gemini work → review with Claude or GPT (same tier sufficient)
+
+**Rationale**: same-family models share training biases and systematically reproduce the same errors. Cross-family review catches blind spots.
+
+---
 
 These agents work in both **Copilot CLI** and **VS Code Copilot Chat**. The usage pattern differs slightly between the two.
 
